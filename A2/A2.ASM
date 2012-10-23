@@ -36,6 +36,7 @@ mystart:
 drawPixel:
         enter   0, 0            ; Create frame.
         push    ebx             ; Push ebx.
+        push    edi             ; Store dest index.
 
         ; Setup the pixel offset in the buffer.
         mov     eax, [ebp+12]   ; Grab the y coordinate.
@@ -43,9 +44,12 @@ drawPixel:
         mul     ebx             ; Multiply!
         add     eax, [ebp+8]    ; Add the x coordinate.
 
-        mov     ebx, [ebp+16]   ; Store the color for use.
-        mov     [fs:eax], ebx   ; Store the color in the frame buffer.
+        mov     edi, eax        ; Store offset in edi.
+        mov     al, [ebp + 16]  ; Store the color in al.
+        stosb                   ; Store the pixel in es:edi
 
+        pop     edi             ; REstore dest index.
+        pop     ebx             ; Restore ebx.
         ret     12              ; Return, 12 byte offset.
 
 ; A function to set the videomode to SVGA so that we can start
@@ -58,6 +62,9 @@ setSVGAMode:
         mov     bx, vidMode     ; Set the video mode. Linear 800x600 256c
 
         int     10h             ; Call the interrupt.
+
+        mov     ax, fs          ; Store fs into ax.
+        mov     es, ax          ; Store ax into es for use with stosb (es:edi)
 
         pop     ebx             ; Restore ebx.
         ret                     ; Return to caller.
