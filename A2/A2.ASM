@@ -17,8 +17,8 @@ mystart:
 
         mov     ecx, 100        ; Draw pixels.
 .drawloop:
-        push    byte 4          ; Set the color.
-        push    byte 32         ; Set the y coord
+        push    dword 4         ; Set the color.
+        push    dword 32        ; Set the y coord
         push    ecx             ; Set the x coord.
         call    drawPixel       ; Draw the pixel.
 
@@ -40,17 +40,35 @@ drawPixel:
 
         ; Setup the pixel offset in the buffer.
         mov     eax, [ebp+12]   ; Grab the y coordinate.
-        mov     ebp, XRES       ; Store the x resolution for mult.
+        mov     ebx, XRES       ; Store the x resolution for mult.
         mul     ebx             ; Multiply!
         add     eax, [ebp+8]    ; Add the x coordinate.
 
         mov     edi, eax        ; Store offset in edi.
-        mov     al, [ebp + 16]  ; Store the color in al.
+        mov     al, [ebp+16]    ; Store the color in al.
         stosb                   ; Store the pixel in es:edi
 
-        pop     edi             ; REstore dest index.
+        pop     edi             ; Restore dest index.
         pop     ebx             ; Restore ebx.
+        leave                   ; Restore the stack frame
         ret     12              ; Return, 12 byte offset.
+
+; Draws the outer box for the game on the screen.
+; Output:       Draws a box on the screen
+drawBox:
+        push    dword 8         ; Color is gray
+        push    dword 394       ; Box is 394 pixels tall (16 rows * 24pixels/row + 10 for outer edge)
+        push    dword 250       ; 250 pixels wide (10 columns * 24 pixels/col + 10 for edge)
+        push    dword 160       ; Upper left y coord
+        push    dword 160       ; Upper left x coord
+        call    drawRect        ; Draw outer rectangle
+        push    dword 0         ; Color is black
+        push    dword 384       ; Inner box 384 pixels tall
+        push    dword 240       ; Inner box 240 pixels wide
+        push    dword 170       ; Upper left y coord
+        push    dword 170       ; Upper left x coord
+        call    drawRect        ; Draw inner rectangle
+        ret
 
 ; A function to set the videomode to SVGA so that we can start
 ; to draw to the screen.
