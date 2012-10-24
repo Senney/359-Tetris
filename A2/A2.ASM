@@ -16,16 +16,58 @@ mystart:
         call    setSVGAMode     ; Set the SVGA drawing mode.
 
         mov     ecx, 100        ; Draw pixels.
-.drawloop:
-        push    byte 4          ; Set the color.
-        push    byte 32         ; Set the y coord
-        push    ecx             ; Set the x coord.
-        call    drawPixel       ; Draw the pixel.
+
+        push    dword 4         ; Color
+        push    dword 24        ; height
+        push    dword 24        ; Width
+        push    dword 200       ; y
+        push    dword 400       ; x
+        call    drawRect        ; Draw the rectangle.
 
         call    readChar        ; Read a character from the buffer.
 
         call    restoreMode     ; Restore the video mode.
         ret
+
+; drawRect(x, y, w, h, color)
+; Draws a rectangle at the specified coordinates with width w and height h.
+; Input:        x: The x coordinate at which to draw the rect.
+;               y: The y coordinate at which to draw the rect.
+;               w: The width of the rectangle.
+;               h: The height of the rectangle.
+;           color: The color of the rectangle.
+drawRect:
+        enter   0, 0
+        push    ecx             ; Store ecx. Use as h counter.
+        push    ebx             ; Store ebx. Use as w counter.
+
+        mov     ecx, [ebp + 20] ; Set ecx to h value.
+
+.rectYLoop:
+        mov     ebx, [ebp + 16] ; Set ebx to w value.
+.rectXLoop:
+        mov     eax, [ebp + 12] ; Set eax to y value.     
+        add     eax, ecx        ; Add height to y.               
+
+        push    dword [ebp + 24]; Push the color.
+        push    eax         ; Push the y value.
+
+        ; Calculate x value.
+        mov     eax, [ebp + 8]  ; Set eax to x value
+        add     eax, ebx        ; Add ebx to eax..
+        push    eax       ; Push the x value.
+        call    drawPixel       ; Draw the pixel.
+
+        dec     ebx             ; Decrement x.
+        cmp     ebx, 0          ; Compare to 0.
+        jne     .rectXLoop      ; Keep looping if not 0.
+        loop    .rectYLoop      ; Otherwise, loop back to rectYLoop
+
+        pop     ebx             ; Restore ebx.
+        pop     ecx             ; Restore ecx.
+        leave                   ; Destroy frame.
+        ret     20              ; Offset stack by 20 bytes.
+
 
 ; drawPixel(x, y, color)
 ; Draws a pixel at the specified spot on the screen.
@@ -40,7 +82,7 @@ drawPixel:
 
         ; Setup the pixel offset in the buffer.
         mov     eax, [ebp+12]   ; Grab the y coordinate.
-        mov     ebp, XRES       ; Store the x resolution for mult.
+        mov     ebx, XRES       ; Store the x resolution for mult.
         mul     ebx             ; Multiply!
         add     eax, [ebp+8]    ; Add the x coordinate.
 
@@ -50,6 +92,7 @@ drawPixel:
 
         pop     edi             ; REstore dest index.
         pop     ebx             ; Restore ebx.
+        leave                   ; Destroy stack frame.
         ret     12              ; Return, 12 byte offset.
 
 ; A function to set the videomode to SVGA so that we can start

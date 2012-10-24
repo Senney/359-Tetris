@@ -1,0 +1,4 @@
+all:
+		copy A2.ASM A2_OLD.ASM
+		nasm -f coff A2.ASM
+		gcc *.o -o A2.EXE
