@@ -1,5 +1,5 @@
 [GLOBAL mystart]                ; Import start code.
-[EXTERN _random]                ; Import the random function.
+[EXTERN _rand]                  ; Import the random function.
 
 [SECTION .data]
 svgaMode        equ 4F02h
@@ -45,7 +45,7 @@ BLOCKS          dd IBLOCK,JBLOCK,SBLOCK,TBLOCK,LBLOCK,OBLOCK,ZBLOCK
 [SECTION .bss]
 vidmode         resb 1
 curBlock        resb 16         ; Reserve 16 bytes to store the current block in.
-
+curBlockType    resb 1          ; 0=I, 1=J, 2=L, 3=O, 4=S, 5=T, 6=Z
 
 [SECTION .text]
 mystart:
@@ -57,7 +57,6 @@ mystart:
         push    dword curBlock  ; curBlock array.
         push    dword IBLOCK    ; Replace with address of block.
         call    copyArray       ; Copy the array.
-
         call    readChar        ; Read a character from the buffer.
 
         call    restoreMode     ; Restore the video mode.
@@ -207,6 +206,114 @@ drawRect:
         leave                   ; Destroy frame.
         ret     20              ; Offset stack by 20 bytes.
 
+; drawL(x, y)
+; Draws an L block at the given location.
+; Input:        x: x coordinate of the upper left corner of the shape
+;               y: y coordinate "                                   "
+; Output:       L block drawn on screen
+drawL:
+        enter   0,0
+        push    ecx
+        mov     ecx, 3
+        .drawloop:
+        push    dword 6         ; Color orange/yellow
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y coord
+        push    dword [ebp+8]   ; x coord
+        call    drawRect
+        add     dword [ebp+8], 30       ; Add 30 to the x-coord
+        loop    .drawloop
+        push    dword 6
+        push    dword 29
+        push    dword 29
+        add     dword [ebp+12], 30      ; Move y-coord to right spot
+        push    dword [ebp+12]
+        sub     dword [ebp+8], 30       ; Move x-coord to right spot
+        push    dword [ebp+8]
+        call    drawRect
+        pop     ecx
+        leave
+        ret     8
+        
+; drawO(x, y)
+; Draws an O block at the given location.
+; Input:        x: x coordinate of the upper left corner of the shape
+;               y: y coordinate "                                   "
+; Output:       O block drawn on screen
+drawO:
+        enter   0,0
+
+        push    dword 0Eh       ; Colour = yellow
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+        add     dword [ebp+8], 30       ; Move to next block coord
+        push    dword 0Eh       ; Colour = yellow
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+        add     dword [ebp+12], 30      ; Move to next block coord
+        push    dword 0Eh       ; Colour = yellow
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+        sub     dword [ebp+8], 30       ; Move to last block coord
+        push    dword 0Eh       ; Colour = yellow
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+
+        leave
+        ret     8
+
+; drawZ(x, y)
+; Draws a Z block at the given location.
+; Input:        x: x coordinate of the upper left corner of the shape
+;               y: y coordinate "                                   "
+; Output:       Z block drawn on screen
+drawZ:
+        enter   0,0
+
+        push    dword 2         ; Colour = green
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+        add     dword [ebp+8], 30       ; Move to next block coord
+        push    dword 2         ; Colour = green
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+        add     dword [ebp+12], 30      ; Move to next block coord
+        push    dword 2         ; Colour = green
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+        add     dword [ebp+8], 30       ; Move to last block coord
+        push    dword 2         ; Colour = green
+        push    dword 29        ; 29 tall
+        push    dword 29        ; 29 wide
+        push    dword [ebp+12]  ; y-coord
+        push    dword [ebp+8]   ; x-coord
+        call    drawRect
+
+        leave
+        ret     8
+
 ; drawPixel(x, y, color)
 ; Draws a pixel at the specified spot on the screen.
 ; Input:        x: The x coordinate of the pixel.
@@ -232,7 +339,8 @@ drawPixel:
         leave                   ; Restore the stack frame
         ret     12              ; Return, 12 byte offset.
 
-; Draws the outer box for the game on the screen.
+; drawBorder()
+; Draws the outer frame for the game on the screen.
 ; Output:       Draws a box on the screen
 drawBorder:
         ; Draw outer rectangle.
@@ -250,6 +358,66 @@ drawBorder:
         push    dword FIELD_Y+BORDER_W ; Upper left y coord
         push    dword FIELD_X+BORDER_W ; Upper left x coord
         call    drawRect        ; Draw outer rectangle
+        ret
+        
+; random()
+; Returns a random number from 0 to 6 in eax
+random:
+        call    _rand                   ; Generate a random number in eax
+        and     eax, 6                  ; Gets rid of extraneous bits
+        ret
+
+; newBlock()
+; Clears out the old block and gets a new one
+newBlock:
+        enter   0,0
+        pushad
+        mov     dword [curBlock], 0     ; Clears out current block buffer
+        mov     dword [curBlock+4], 0
+        call    random                  ; Generates a random number
+        mov     byte [curBlockType], al ; Moves random block type into current type
+        mov     edi, curBlock           ; Current block buffer in edi
+        mov     ecx, 2                  ; Moving two doubles
+        .iblock:
+        ;     esi, IBLOCK             ; Address for I-block in esi
+        rep     movsd                   ; Moves the I block into current buffer
+        jmp     .end
+        .jblock:
+        cmp     eax, 1
+        jne     .lblock
+        ;mov     esi, JBLOCK
+        rep     movsd
+        jmp     .end
+        .lblock:
+        cmp     eax, 2
+        jne     .oblock
+        mov     esi, LBLOCK
+        rep     movsd
+        jmp     .end
+        .oblock:
+        cmp     eax, 3
+        jne     .sblock
+        mov     esi, OBLOCK
+        rep     movsd
+        jmp     .end
+        .sblock:
+        cmp     eax, 4
+        jne     .tblock
+        ;mov     esi, SBLOCK
+        rep     movsd
+        jmp     .end
+        .tblock:
+        cmp     eax, 5
+        jne     .zblock
+        ;mov     esi, TBLOCK
+        rep     movsd
+        jmp     .end
+        .zblock:
+        mov     esi, ZBLOCK
+        rep     movsd
+        .end:
+        popad
+        leave
         ret
 
 ; A function to set the videomode to SVGA so that we can start
