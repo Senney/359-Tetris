@@ -4,8 +4,8 @@
 __Sean Tasks__
 * ~~Draw Pixel~~
 * ~~Draw Rectangle~~
-* I and J blocks
-* S and T blocks
+* ~~I and J blocks~~
+* ~~S and T blocks~~
 * Bounding Box
 * Move Block
 
