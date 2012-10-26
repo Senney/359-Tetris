@@ -1,5 +1,6 @@
 [GLOBAL mystart]                ; Import start code.
 [EXTERN _rand]                  ; Import the random function.
+[EXTERN _srand]                 ; Import random seed func.
 
 [SECTION .data]
 svgaMode        equ 4F02h
@@ -7,13 +8,18 @@ vidMode         equ 4105h       ; 4 is there to specify linear addressing.
 XRES            equ 1024        ; X resolution of the screen.
 YRES            equ 720         ; Y resolution of the screen.
 
-FIELD_X         equ 250         ; Position of the playing field.
-FIELD_Y         equ 100         ; ""
+FIELD_X         equ 352         ; Position of the playing field.
+FIELD_Y         equ 20          ; ""
 FIELD_W         equ 10          ; Size of the playing field in brick cells.
 FIELD_H         equ 20          ; ""
+
 BORDER_W        equ 5           ; Set the width of the border.
 SQR_SIZE        equ 32          ; Size of a brick.
 RECT_S          equ SQR_SIZE-1  ; Size of a brick to draw. (1 pixel between).
+
+; Collision data
+FIELD_BOT       equ FIELD_Y + (FIELD_W * SQR_SIZE) + BORDER_W
+FIELD_RIGHT     equ FIELD_X + (FIELD_W * SQR_SIZE) + BORDER_W
 
 BLOCK_X         equ FIELD_X + ((FIELD_W/2-2)*SQR_SIZE) + BORDER_W ; Starting x for block.
 BLOCK_Y         equ FIELD_Y + BORDER_W           ; Starting y for block.
@@ -24,6 +30,9 @@ L_GREEN         equ 0xA         ; Light green.
 PURPLE          equ 5           ; Purple.
 GREY            equ 8           ; Grey
 BLACK           equ 0           ; Black
+ORANGE          equ 6           ; Orange
+L_RED           equ 0xC         ; Light red.
+YELLOW          equ 0xE         ; Yellow
 
 ; Block definitions (4x4 arrays)
 ; e.g.
@@ -40,12 +49,18 @@ OBLOCK          db 1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0
 ZBLOCK          db 1,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0
 ; Array containing the addresses of all blocks. For easy reference from rand
 ; number generation.
-BLOCKS          dd IBLOCK,JBLOCK,SBLOCK,TBLOCK,LBLOCK,OBLOCK,ZBLOCK
+BLOCKS          dd IBLOCK,JBLOCK,LBLOCK,OBLOCK,SBLOCK,TBLOCK,ZBLOCK
+
+; Seed for the random number generator.
+RAND_SEED       dd 0xBEEFCA5E
 
 [SECTION .bss]
 vidmode         resb 1
 curBlock        resb 16         ; Reserve 16 bytes to store the current block in.
 curBlockType    resb 1          ; 0=I, 1=J, 2=L, 3=O, 4=S, 5=T, 6=Z
+curBlockColor   resd 1          ; Reserve a byte for the color.
+curX            resd 1          ; Current x position.
+curY            resd 1          ; Current y position.
 
 [SECTION .text]
 mystart:
@@ -53,14 +68,73 @@ mystart:
 
         call    drawBorder      ; Draw the border around the field.
 
-        push    dword 16        ; Size of array.
-        push    dword curBlock  ; curBlock array.
-        push    dword IBLOCK    ; Replace with address of block.
-        call    copyArray       ; Copy the array.
+        mov     [curBlockType], byte 1 ; Set the current block to J.
+        mov     [curBlockColor], dword D_BLUE ; Set the color to dark blue.
+        mov     [curY], dword BLOCK_Y
+        mov     [curX], dword BLOCK_X
+
+        push    dword JBLOCK
+        push    dword curBlock
+        call    copyBlock
+
+        mov     ecx, 40
+.dloop:
+        ; Temporary delay loop.
+        push    ecx
+        mov     ecx, 50000000
+        .iLoop:
+                loop    .iLoop
+        pop     ecx
+
+        mov     eax, [curY]
+
+        cmp     eax, FIELD_BOT
+        jge     .finLoop        
+        push    dword curBlock
+        push    dword SQR_SIZE
+        call    translateDown
+        .finLoop:
+
+        loop    .dloop
+        
         call    readChar        ; Read a character from the buffer.
 
         call    restoreMode     ; Restore the video mode.
         ret
+        
+; translateDown(amount, buffer)
+; Translates a block represented by a 4x4 buffer downwards by n.
+; Input:        amount: The amount to translate down by.
+;               buffer: The buffer in which the block is represented.
+; Output:
+;               The block is moved n pixels down.
+translateDown:
+        enter   0, 0            ; Enter the function
+        pushad                  ; Push the registers on to the stack.
+
+        mov     eax, [curY]     ; Get the current y position.
+        mov     ebx, [curX]     ; Get the current x position.
+        mov     edx, [ebp+12]   ; Get the buffer.
+
+        push    dword BLACK     ; Draw black.
+        push    edx             ; Push the current block.
+        push    eax             ; Push the y position.
+        push    ebx             ; Push the x position.
+        call    drawBlock       ; Draw black over the previous shape.
+
+        add     eax, [ebp+8]    ; Add the offset.
+
+        push    dword 0xC       ; Push the color.
+        push    edx             ; Push the block.
+        push    eax             ; Push the y position
+        push    ebx             ; Push the x position.
+        call    drawBlock       ; Draw the block.
+
+        mov     [curY], eax     ; Store curY again.
+        
+        popad                   ; Restore registers.
+        leave                   ; Destroy the frame.
+        ret     8               ; Return to caller. Stack offset 8.
 
 ; drawT(x, y)
 ; Draws a T block starting at position x, y
@@ -126,7 +200,7 @@ drawI:
         leave                   ; Destroy stack frame.
         ret     8               ; Return to caller.
 
-; drawBlock(x, y, xs, ys, buffer)
+; drawBlock(x, y, buffer, color)
 ; Draws a block at the specified coordinates (x, y) from the buffer.
 ; Input:        x: x coord.
 ;               y: y coord.
@@ -213,26 +287,13 @@ drawRect:
 ; Output:       L block drawn on screen
 drawL:
         enter   0,0
-        push    ecx
-        mov     ecx, 3
-        .drawloop:
-        push    dword 6         ; Color orange/yellow
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y coord
-        push    dword [ebp+8]   ; x coord
-        call    drawRect
-        add     dword [ebp+8], 30       ; Add 30 to the x-coord
-        loop    .drawloop
-        push    dword 6
-        push    dword 29
-        push    dword 29
-        add     dword [ebp+12], 30      ; Move y-coord to right spot
-        push    dword [ebp+12]
-        sub     dword [ebp+8], 30       ; Move x-coord to right spot
-        push    dword [ebp+8]
-        call    drawRect
-        pop     ecx
+
+        push    dword ORANGE    ; Set color to orange.
+        push    dword LBLOCK    ; Set buffer.
+        push    dword [ebp+12]  ; Set y coordinate
+        push    dword [ebp+8]   ; Set x coorindate
+        call    drawBlock      ; Draw the buffer.
+
         leave
         ret     8
         
@@ -244,33 +305,11 @@ drawL:
 drawO:
         enter   0,0
 
-        push    dword 0Eh       ; Colour = yellow
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
-        add     dword [ebp+8], 30       ; Move to next block coord
-        push    dword 0Eh       ; Colour = yellow
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
-        add     dword [ebp+12], 30      ; Move to next block coord
-        push    dword 0Eh       ; Colour = yellow
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
-        sub     dword [ebp+8], 30       ; Move to last block coord
-        push    dword 0Eh       ; Colour = yellow
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
+        push    dword YELLOW    ; Set color to yellow
+        push    dword OBLOCK    ; Set buffer.
+        push    dword [ebp+12]  ; Set y coordinate
+        push    dword [ebp+8]   ; Set x coorindate
+        call    drawBlock      ; Draw the buffer.
 
         leave
         ret     8
@@ -283,33 +322,11 @@ drawO:
 drawZ:
         enter   0,0
 
-        push    dword 2         ; Colour = green
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
-        add     dword [ebp+8], 30       ; Move to next block coord
-        push    dword 2         ; Colour = green
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
-        add     dword [ebp+12], 30      ; Move to next block coord
-        push    dword 2         ; Colour = green
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
-        add     dword [ebp+8], 30       ; Move to last block coord
-        push    dword 2         ; Colour = green
-        push    dword 29        ; 29 tall
-        push    dword 29        ; 29 wide
-        push    dword [ebp+12]  ; y-coord
-        push    dword [ebp+8]   ; x-coord
-        call    drawRect
+        push    dword L_RED     ; Set color to red.
+        push    dword ZBLOCK    ; Set buffer.
+        push    dword [ebp+12]  ; Set y coordinate
+        push    dword [ebp+8]   ; Set x coorindate
+        call    drawBlock      ; Draw the buffer.
 
         leave
         ret     8
@@ -345,16 +362,16 @@ drawPixel:
 drawBorder:
         ; Draw outer rectangle.
         push    dword GREY      ; Color is gray
-        push    dword FIELD_H * SQR_SIZE        ; Calculate the field size.
-        push    dword FIELD_W * SQR_SIZE
+        push    dword FIELD_H * SQR_SIZE + (BORDER_W*2) ; Calculate the field size.
+        push    dword FIELD_W * SQR_SIZE + (BORDER_W*2)
         push    dword FIELD_Y   ; Upper left y coord
         push    dword FIELD_X   ; Upper left x coord
         call    drawRect        ; Draw outer rectangle
         ; Clear inner rectangle.
         push    dword BLACK     ; Color is black
         ; Push on the size of the field.
-        push    dword FIELD_H * SQR_SIZE-(BORDER_W*2)
-        push    dword FIELD_W * SQR_SIZE-(BORDER_W*2)
+        push    dword FIELD_H * SQR_SIZE
+        push    dword FIELD_W * SQR_SIZE
         push    dword FIELD_Y+BORDER_W ; Upper left y coord
         push    dword FIELD_X+BORDER_W ; Upper left x coord
         call    drawRect        ; Draw outer rectangle
@@ -363,14 +380,23 @@ drawBorder:
 ; random()
 ; Returns a random number from 0 to 6 in eax
 random:
+        push    dword [RAND_SEED]       ; Set the seed.
+        call    _srand                  ; Call srand. Set a seed for random.
+        add     esp, 4                  ; Align the stack pointer.
+
+generate:
         call    _rand                   ; Generate a random number in eax
-        and     eax, 6                  ; Gets rid of extraneous bits
-        ret
+        and     eax, 7                  ; Discard all but 0111b
+
+        cmp     eax, 7                  ; Check if random number was 7.
+        jge     generate                ; If it is, loop back and generate again.
+
+        ret                             ; Return to calling code.
 
 ; newBlock()
 ; Clears out the old block and gets a new one
 newBlock:
-        enter   0,0
+        enter   0,0 
         pushad
         mov     dword [curBlock], 0     ; Clears out current block buffer
         mov     dword [curBlock+4], 0
@@ -475,19 +501,23 @@ readChar:
         int     0f1h
         ret
 
-; copyArray(dest, src, size)
-; Copies the content of one array to another.
+; copyBlock(dest, src)
+; Copies the content of one block array to another. 4x4 arrays!
 ; Input         dest: The location of the destination array.
 ;                src: The location of the source array.
-;               size: The size of the source array and dest array.
 ; Output        dest contains the data in src.
-copyArray:
+copyBlock:
         enter   0, 0            ; Setup the frame.
+        push    esi             ; Store esi and edi.
+        push    edi
 
         mov     esi, [ebp+12]   ; Set the source.
         mov     edi, [ebp+8]    ; Set the dest.
-        mov     ecx, [ebp+16]   ; Set the amount of data to copy.
+        mov     ecx, 16         ; Move 16 bytes.
+        cld                     ; Clear the direction flag.
         rep     movsb           ; Move data from esi to edi.
 
+        pop     esi             ; Restore esi and edi.
+        pop     edi
         leave                   ; Destroy the frame
-        ret     12              ; Return to calling code
+        ret     8               ; Return to calling code

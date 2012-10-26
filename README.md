@@ -7,7 +7,7 @@ __Sean Tasks__
 * ~~I and J blocks~~
 * ~~S and T blocks~~
 * Bounding Box
-* Move Block
+* ~~Move Block~~
 
 __Brent Tasks__
 * ~~Draw outer box~~
