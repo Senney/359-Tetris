@@ -18,7 +18,7 @@ SQR_SIZE        equ 32          ; Size of a brick.
 RECT_S          equ SQR_SIZE-1  ; Size of a brick to draw. (1 pixel between).
 
 ; Collision data
-FIELD_BOT       equ FIELD_Y + (FIELD_W * SQR_SIZE) + BORDER_W
+FIELD_BOT       equ FIELD_Y + (FIELD_H * SQR_SIZE) + BORDER_W
 FIELD_RIGHT     equ FIELD_X + (FIELD_W * SQR_SIZE) + BORDER_W
 
 BLOCK_X         equ FIELD_X + ((FIELD_W/2-2)*SQR_SIZE) + BORDER_W ; Starting x for block.
@@ -40,8 +40,8 @@ YELLOW          equ 0xE         ; Yellow
 ; 1110 J block
 ; 0000
 ; 0000
-IBLOCK          db 1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0
-JBLOCK          db 0,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0
+IBLOCK          db 1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0
+JBLOCK          db 1,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0
 SBLOCK          db 0,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0
 TBLOCK          db 0,1,0,0,1,1,1,0,0,0,0,0,0,0,0,0
 LBLOCK          db 0,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0
@@ -50,6 +50,7 @@ ZBLOCK          db 1,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0
 ; Array containing the addresses of all blocks. For easy reference from rand
 ; number generation.
 BLOCKS          dd IBLOCK,JBLOCK,LBLOCK,OBLOCK,SBLOCK,TBLOCK,ZBLOCK
+COLORS          dd L_BLUE,D_BLUE,ORANGE,YELLOW,L_GREEN,PURPLE,L_RED
 
 ; Seed for the random number generator.
 RAND_SEED       dd 0xBEEFCA5E
@@ -58,7 +59,7 @@ RAND_SEED       dd 0xBEEFCA5E
 vidmode         resb 1
 curBlock        resb 16         ; Reserve 16 bytes to store the current block in.
 curBlockType    resb 1          ; 0=I, 1=J, 2=L, 3=O, 4=S, 5=T, 6=Z
-curBlockColor   resd 1          ; Reserve a byte for the color.
+curBlockColor   resd 1          ; Reserve a double for the color.
 curX            resd 1          ; Current x position.
 curY            resd 1          ; Current y position.
 
@@ -68,31 +69,42 @@ mystart:
 
         call    drawBorder      ; Draw the border around the field.
 
-        mov     [curBlockType], byte 1 ; Set the current block to J.
-        mov     [curBlockColor], dword D_BLUE ; Set the color to dark blue.
+        push    dword [RAND_SEED]       ; Set the seed.
+        call    _srand                  ; Call srand. Set a seed for random.
+        add     esp, 4                  ; Align the stack pointer.
+
+.dloop:
+        cmp     dword [curBlock], 0     ; Check to see if there's a block
+        jne     .delay                  ; Jump if there isn't
+        call    random                  ; Number from 0-6 in eax
+        mov     [curBlockType], al      ; Move random number into block type
+        mov     ebx, 4
+        mul     ebx                     ; Multiply random number by 4 for offset
+        mov     ebx, BLOCKS             ; Move address of block presets into ebx
+        add     ebx, eax                ; Offset to block address
+        add     eax, COLORS             ; Gets offset to proper colour
+        mov     eax, [eax]              ; Get colour
+        mov     [curBlockColor], eax    ; Stores colour
+        push    dword [ebx]             ; Push block address
+        push    dword curBlock          ; Push offset to block buffer
+        call    copyBlock               ; Copies preset block to current block buffer
         mov     [curY], dword BLOCK_Y
         mov     [curX], dword BLOCK_X
-
-        push    dword JBLOCK
-        push    dword curBlock
-        call    copyBlock
-
-        mov     ecx, 40
-.dloop:
+        
+        .delay:
         ; Temporary delay loop.
         push    ecx
-        mov     ecx, 50000000
+        mov     ecx, 5000000
         .iLoop:
                 loop    .iLoop
         pop     ecx
-
-        mov     eax, [curY]
-
-        cmp     eax, FIELD_BOT
-        jge     .finLoop        
+        
         push    dword curBlock
         push    dword SQR_SIZE
         call    translateDown
+        cmp     dword [curY], FIELD_BOT
+        jl      .finLoop
+        call    newBlock
         .finLoop:
 
         loop    .dloop
@@ -124,7 +136,7 @@ translateDown:
 
         add     eax, [ebp+8]    ; Add the offset.
 
-        push    dword 0xC       ; Push the color.
+        push    dword [curBlockColor]       ; Push the color.
         push    edx             ; Push the block.
         push    eax             ; Push the y position
         push    ebx             ; Push the x position.
@@ -380,69 +392,20 @@ drawBorder:
 ; random()
 ; Returns a random number from 0 to 6 in eax
 random:
-        push    dword [RAND_SEED]       ; Set the seed.
-        call    _srand                  ; Call srand. Set a seed for random.
-        add     esp, 4                  ; Align the stack pointer.
-
-generate:
         call    _rand                   ; Generate a random number in eax
         and     eax, 7                  ; Discard all but 0111b
 
         cmp     eax, 7                  ; Check if random number was 7.
-        jge     generate                ; If it is, loop back and generate again.
+        jge     random                  ; If it is, loop back and generate again.
 
         ret                             ; Return to calling code.
 
 ; newBlock()
-; Clears out the old block and gets a new one
+; Clears out the old block.
 newBlock:
-        enter   0,0 
-        pushad
+        enter   0,0
         mov     dword [curBlock], 0     ; Clears out current block buffer
         mov     dword [curBlock+4], 0
-        call    random                  ; Generates a random number
-        mov     byte [curBlockType], al ; Moves random block type into current type
-        mov     edi, curBlock           ; Current block buffer in edi
-        mov     ecx, 2                  ; Moving two doubles
-        .iblock:
-        ;     esi, IBLOCK             ; Address for I-block in esi
-        rep     movsd                   ; Moves the I block into current buffer
-        jmp     .end
-        .jblock:
-        cmp     eax, 1
-        jne     .lblock
-        ;mov     esi, JBLOCK
-        rep     movsd
-        jmp     .end
-        .lblock:
-        cmp     eax, 2
-        jne     .oblock
-        mov     esi, LBLOCK
-        rep     movsd
-        jmp     .end
-        .oblock:
-        cmp     eax, 3
-        jne     .sblock
-        mov     esi, OBLOCK
-        rep     movsd
-        jmp     .end
-        .sblock:
-        cmp     eax, 4
-        jne     .tblock
-        ;mov     esi, SBLOCK
-        rep     movsd
-        jmp     .end
-        .tblock:
-        cmp     eax, 5
-        jne     .zblock
-        ;mov     esi, TBLOCK
-        rep     movsd
-        jmp     .end
-        .zblock:
-        mov     esi, ZBLOCK
-        rep     movsd
-        .end:
-        popad
         leave
         ret
 
@@ -510,14 +473,21 @@ copyBlock:
         enter   0, 0            ; Setup the frame.
         push    esi             ; Store esi and edi.
         push    edi
+        push    ecx
 
         mov     esi, [ebp+12]   ; Set the source.
         mov     edi, [ebp+8]    ; Set the dest.
-        mov     ecx, 16         ; Move 16 bytes.
-        cld                     ; Clear the direction flag.
-        rep     movsb           ; Move data from esi to edi.
+        mov     dword ecx, [esi]
+        mov     dword [edi], ecx
+        mov     dword ecx, [esi+4]
+        mov     dword [edi+4], ecx
+        mov     dword ecx, [esi+8]
+        mov     dword [edi+8], ecx
+        mov     dword ecx, [esi+12]
+        mov     dword [edi+12], ecx
 
-        pop     esi             ; Restore esi and edi.
-        pop     edi
+        pop     ecx
+        pop     edi             ; Restore esi and edi.
+        pop     esi
         leave                   ; Destroy the frame
         ret     8               ; Return to calling code
