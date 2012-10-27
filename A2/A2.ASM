@@ -72,47 +72,81 @@ mystart:
         push    dword [RAND_SEED]       ; Set the seed.
         call    _srand                  ; Call srand. Set a seed for random.
         add     esp, 4                  ; Align the stack pointer.
-
+        call    newBlock        
 .dloop:
-        cmp     dword [curBlock], 0     ; Check to see if there's a block
-        jne     .delay                  ; Jump if there isn't
-        call    random                  ; Number from 0-6 in eax
-        mov     [curBlockType], al      ; Move random number into block type
-        mov     ebx, 4
-        mul     ebx                     ; Multiply random number by 4 for offset
-        mov     ebx, BLOCKS             ; Move address of block presets into ebx
-        add     ebx, eax                ; Offset to block address
-        add     eax, COLORS             ; Gets offset to proper colour
-        mov     eax, [eax]              ; Get colour
-        mov     [curBlockColor], eax    ; Stores colour
-        push    dword [ebx]             ; Push block address
-        push    dword curBlock          ; Push offset to block buffer
-        call    copyBlock               ; Copies preset block to current block buffer
-        mov     [curY], dword BLOCK_Y
-        mov     [curX], dword BLOCK_X
-        
         .delay:
         ; Temporary delay loop.
         push    ecx
-        mov     ecx, 5000000
+        mov     ecx, 40000000
         .iLoop:
-                loop    .iLoop
+        loop    .iLoop
         pop     ecx
         
         push    dword curBlock
         push    dword SQR_SIZE
         call    translateDown
-        cmp     dword [curY], FIELD_BOT
+        cmp     dword [curY], FIELD_BOT-SQR_SIZE
         jl      .finLoop
         call    newBlock
         .finLoop:
 
         loop    .dloop
-        
-        call    readChar        ; Read a character from the buffer.
 
         call    restoreMode     ; Restore the video mode.
         ret
+
+; collDown(buffer)
+; Checks to see if a block buffer will collide if it moves down.
+; Input:        buffer: The buffer the block is stored in
+; Output:       1 in al if it will collide; 0 otherwise.
+collDown:
+        enter   0,0                     ; Create stack frame
+        push    ebx                     ; Save registers
+        push    ecx
+        push    edx
+        push    edi
+        push    esi
+        mov     bx, es
+        mov     ds, bx
+        mov     dword ebx, [ebp+8]      ; Move the buffer into edi
+        mov     esi, [curY]             ; Get current Y position of block
+        add     esi, SQR_SIZE           ; Move down a block
+        add     esi, 2                  ; Move down a couple pixels to avoid black edges
+        mov     eax, XRES               ; X-resolution of the screen in eax
+        mul     esi                     ; Point to first row
+        mov     esi, eax                ; Move out of accumulator
+        add     esi, [curX]             ; Offset to current block
+        add     esi, 2                  ; Offset to avoid black edge
+        mov     edi, 16                 ; Set edi as counter
+        .collLoop:
+        mov     ecx, 4                  ; Set loop counter
+        .inLoop:
+        cmp     byte [ebx], 0           ; Check if there should be a block
+        je      .inEnd                  ; Skip rest if there isn't
+        cld                             ; Forward direction
+        lodsb                           ; Loads byte from [es:esi] into al
+        cmp     al, 0                   ; Check to see if there's a block in the way
+        je      .inEnd                  ; Skip rest if there isn't
+        mov     al, 1                   ; Move 1 into al (collision found)
+        jmp     .end                    ; Exit loop
+        .inEnd:
+        add     esi, SQR_SIZE           ; Move to next square
+        inc     ebx                     ; Move to next buffer location
+        dec     edi                     ; Decrement buffer counter
+        loop    .inLoop
+        sub     esi, SQR_SIZE*4         ; Move back to start of row
+        add     esi, XRES*SQR_SIZE      ; Move to next row of blocks
+        cmp     edi, 1                  ; Check how many buffer locations have been checked
+        jg     .collLoop                ; Jump if not at end of buffer
+        mov     al, 0                   ; Set al to 0 (no collision)
+        .end:
+        pop     esi                     ; Restore registers
+        pop     edi
+        pop     edx
+        pop     ecx
+        pop     ebx
+        leave                           ; Destroy stack frame
+        ret 4                           ; 1 argument
         
 ; translateDown(amount, buffer)
 ; Translates a block represented by a 4x4 buffer downwards by n.
@@ -134,8 +168,18 @@ translateDown:
         push    ebx             ; Push the x position.
         call    drawBlock       ; Draw black over the previous shape.
 
-        add     eax, [ebp+8]    ; Add the offset.
-
+        push    eax
+        push    edx
+        call    collDown        ; Check if there will be a collision
+        cmp     al, 1           ; Check if there was a collision
+        je      .coll
+        pop     eax
+        add     eax, [ebp+8]    ; Add the offset if there was no collision
+        jmp     .draw
+        .coll:
+        pop     eax
+        mov     cl, 1           ; Set flag to reset block at end
+        .draw:
         push    dword [curBlockColor]       ; Push the color.
         push    edx             ; Push the block.
         push    eax             ; Push the y position
@@ -143,7 +187,11 @@ translateDown:
         call    drawBlock       ; Draw the block.
 
         mov     [curY], eax     ; Store curY again.
-        
+
+        cmp     cl, 1
+        jne     .end
+        call    newBlock
+        .end:
         popad                   ; Restore registers.
         leave                   ; Destroy the frame.
         ret     8               ; Return to caller. Stack offset 8.
@@ -401,11 +449,29 @@ random:
         ret                             ; Return to calling code.
 
 ; newBlock()
-; Clears out the old block.
+; Clears out the old block and replaces it with a new one
+; Output:       curBlockColor, curBlockType, and curBlock all modified.
 newBlock:
         enter   0,0
+        pushad
         mov     dword [curBlock], 0     ; Clears out current block buffer
         mov     dword [curBlock+4], 0
+
+        call    random                  ; Number from 0-6 in eax
+        mov     [curBlockType], al      ; Move random number into block type
+        mov     ebx, 4
+        mul     ebx                     ; Multiply random number by 4 for offset
+        mov     ebx, BLOCKS             ; Move address of block presets into ebx
+        add     ebx, eax                ; Offset to block address
+        add     eax, COLORS             ; Gets offset to proper colour
+        mov     eax, [eax]              ; Get colour
+        mov     [curBlockColor], eax    ; Stores colour
+        push    dword [ebx]             ; Push block address
+        push    dword curBlock          ; Push offset to block buffer
+        call    copyBlock               ; Copies preset block to current block buffer
+        mov     [curY], dword BLOCK_Y
+        mov     [curX], dword BLOCK_X
+        popad
         leave
         ret
 
