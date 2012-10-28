@@ -33,6 +33,7 @@ BLACK           equ 0           ; Black
 ORANGE          equ 6           ; Orange
 L_RED           equ 0xC         ; Light red.
 YELLOW          equ 0xE         ; Yellow
+FROZEN          equ 0xF         ; Light purple for frozen blocks.
 
 ; Block definitions (4x4 arrays)
 ; e.g.
@@ -55,6 +56,11 @@ COLORS          dd L_BLUE,D_BLUE,ORANGE,YELLOW,L_GREEN,PURPLE,L_RED
 ; Seed for the random number generator.
 RAND_SEED       dd 0xBEEFCA5E
 
+; Number of iterations for the delay.
+DELAY_NORMAL    equ 40000000    ; Normal delay for quick drop blocks.
+DELAY_FAST      equ 20000000    ; Fast delay for quick drop blocks (2x fast).
+DELAYAMOUNT     dd  DELAY_NORMAL; The amount to actually delay.
+
 [SECTION .bss]
 vidmode         resb 1
 curBlock        resb 16         ; Reserve 16 bytes to store the current block in.
@@ -62,6 +68,8 @@ curBlockType    resb 1          ; 0=I, 1=J, 2=L, 3=O, 4=S, 5=T, 6=Z
 curBlockColor   resd 1          ; Reserve a double for the color.
 curX            resd 1          ; Current x position.
 curY            resd 1          ; Current y position.
+hasTranslated   resb 1          ; Byte to indicate whether the current block has moved yet.
+atTop           resb 1          ; Flag for if we have gotten to the top yet.
 
 [SECTION .text]
 mystart:
@@ -74,13 +82,11 @@ mystart:
         add     esp, 4                  ; Align the stack pointer.
         call    newBlock        
 .dloop:
-        .delay:
-        ; Temporary delay loop.
-        push    ecx
-        mov     ecx, 40000000
-        .iLoop:
-        loop    .iLoop
-        pop     ecx
+        cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
+        je      .loopDone               ; If we're at the top, finish the game.
+
+        push    dword [DELAYAMOUNT]     ; Wait for n cycles before continuing.
+        call    delay                   ; Delay function.
         
         push    dword curBlock
         push    dword SQR_SIZE
@@ -91,6 +97,9 @@ mystart:
         .finLoop:
 
         loop    .dloop
+
+.loopDone:
+        call    readChar        ; Wait for a character before exiting.
 
         call    restoreMode     ; Restore the video mode.
         ret
@@ -106,35 +115,54 @@ collDown:
         push    edx
         push    edi
         push    esi
-        mov     dword ebx, [ebp+8]      ; Move the buffer into edi
-        mov     esi, [curY]             ; Get current Y position of block
-        add     esi, SQR_SIZE           ; Move down a block
-        add     esi, 2                  ; Move down a couple pixels to avoid black edges
-        mov     eax, XRES               ; X-resolution of the screen in eax
-        mul     esi                     ; Point to first row
-        mov     esi, eax                ; Move out of accumulator
-        add     esi, [curX]             ; Offset to current block
-        add     esi, 2                  ; Offset to avoid black edge
-        mov     edi, 16                 ; Set edi as counter
+        mov     dword edx, [ebp+8]      ; Move the buffer into edx
+
+        mov     dword ebx, [curY]       ; Get the current Y position of the block.
+        mov     dword eax, [curX]       ; Current X position.
+
+        ; For our collision detection, we want to check the block below
+        ; the current block. This means we have to add SQR_SIZE to
+        ; the Y position.
+        add     ebx, SQR_SIZE           ; Add the size of one block to y.
+
+        add     ebx, 2                  ; Offset y position by 2 pixels.
+        add     eax, 2                  ; Offset x position by 2 pixels.
+        ; This is done so that we check the actual inside of the block
+        ; instead of the black border where collision detection will fail.
+
+        ; Setup the pixel offset in the buffer.
+        mov     esi, ebx                ; Move the Y position into edi for manipulation.
+        shl     esi, 10                 ; Multiply by 1024
+        add     esi, eax                ; Add the x coordinate.
+
+        mov     eax, 4                  ; Number of rows in the matrix.
+
         .collLoop:
-        mov     ecx, 4                  ; Set loop counter
+        mov     ecx, 4                  ; Columns in matrix.
         .inLoop:
-        cmp     byte [ebx], 0           ; Check if there should be a block for current block
+        cmp     byte [edx], 0           ; Check if there should be a block for current block
         je      .inEnd                  ; Skip rest if there isn't
-        cmp     byte [es:esi], 0        ; Check if there is a frozen block
-        je      .inEnd                  ; Skip rest if there isn't
+        cmp     byte [es:esi], 0        ; Check if it's the frozen color.
+        jne     .collision              ; If it is, do the collision.
+        cmp     ebx, FIELD_BOT          ; Check if out of bounds.
+        jle     .inEnd                  ; If we are, collide.
+        .collision:
         mov     al, 1                   ; Move 1 into al (collision found)
         jmp     .end                    ; Exit loop
         .inEnd:
         add     esi, SQR_SIZE           ; Move to next square
-        inc     ebx                     ; Move to next buffer location
-        add     esi, SQR_SIZE           ; Move to next block
-        dec     edi                     ; Decrement buffer counter
-        loop    .inLoop
-        sub     esi, SQR_SIZE*4         ; Move back to start of row
-        add     esi, XRES*SQR_SIZE      ; Move to next row of blocks
-        cmp     edi, 1                  ; Check how many buffer locations have been checked
-        jg     .collLoop                ; Jump if not at end of buffer
+        inc     edx                     ; Move to next buffer location
+        loop    .inLoop                 ; Loop back and check more pixels.
+        
+        sub     esi, SQR_SIZE * 4       ; Bring pointer back to beginning of row.
+        add     esi, XRES*SQR_SIZE      ; Move to next row of blocks.
+        add     ebx, SQR_SIZE           ; Increase Y position for collision.
+
+        dec     eax                     ; Decrement the outer loop counter.
+        cmp     eax, 0                  ; Check if we still need to loop.
+        jne     .collLoop               ; Loop back if we do.
+
+        .noCollision:
         mov     al, 0                   ; Set al to 0 (no collision)
         .end:
         pop     esi                     ; Restore registers
@@ -176,6 +204,9 @@ translateDown:
         .coll:
         pop     eax
         mov     cl, 1           ; Set flag to reset block at end
+        cmp     [hasTranslated], byte 1 ; Check if the block has translated yet.
+        je      .draw           ; If we have translated, continue drawing.
+        mov     [atTop], byte 1 ; Otherwise, we must be at the top of the field, so set the flag to 1.
         .draw:
         push    dword [curBlockColor]       ; Push the color.
         push    edx             ; Push the block.
@@ -185,8 +216,10 @@ translateDown:
 
         mov     [curY], eax     ; Store curY again.
 
+        mov     [hasTranslated], byte 1 ; Set the translation flag.
         cmp     cl, 1
         jne     .end
+        mov     [hasTranslated], byte 0 ; Clear the translation flag.
         call    newBlock
         .end:
         popad                   ; Restore registers.
@@ -208,6 +241,21 @@ drawT:
 
         leave                   ; Destroy frame.
         ret     8               ; Return to caller.
+
+; delay(amount)
+; Runs a loop to delay the program for some number of iterations.
+; Input:        amount: The number of iterations to delay for. Larger = More delay.
+delay:
+        enter   0, 0                    ; Create the stack frame.
+        push    ecx                     ; Store ecx.
+
+        mov     ecx, dword [ebp+8]      ; Get the delay amount.
+.dloop:
+        loop    .dloop                  ; Loop until ecx is 0.
+
+        pop     ecx                     ; Restore ecx.
+        leave                           ; Destroy frame.
+        ret     4                       ; Return to caller. Offset 4.
 
 ; drawS(x, y)
 ; Draws a S block starting at position x, y
@@ -263,6 +311,7 @@ drawI:
 ;               y: y coord.
 ;          buffer: the buffer in which the block is stored.
 ;           color: the color of the block
+; Output:     eax: The current offset of the block in the lfb.
 drawBlock:
         enter   0, 0            ; Enter the function.
         pushad                  ; Save registers.
