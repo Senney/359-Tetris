@@ -106,8 +106,6 @@ collDown:
         push    edx
         push    edi
         push    esi
-        mov     bx, es
-        mov     ds, bx
         mov     dword ebx, [ebp+8]      ; Move the buffer into edi
         mov     esi, [curY]             ; Get current Y position of block
         add     esi, SQR_SIZE           ; Move down a block
@@ -121,17 +119,16 @@ collDown:
         .collLoop:
         mov     ecx, 4                  ; Set loop counter
         .inLoop:
-        cmp     byte [ebx], 0           ; Check if there should be a block
+        cmp     byte [ebx], 0           ; Check if there should be a block for current block
         je      .inEnd                  ; Skip rest if there isn't
-        cld                             ; Forward direction
-        lodsb                           ; Loads byte from [es:esi] into al
-        cmp     al, 0                   ; Check to see if there's a block in the way
+        cmp     byte [es:esi], 0        ; Check if there is a frozen block
         je      .inEnd                  ; Skip rest if there isn't
         mov     al, 1                   ; Move 1 into al (collision found)
         jmp     .end                    ; Exit loop
         .inEnd:
         add     esi, SQR_SIZE           ; Move to next square
         inc     ebx                     ; Move to next buffer location
+        add     esi, SQR_SIZE           ; Move to next block
         dec     edi                     ; Decrement buffer counter
         loop    .inLoop
         sub     esi, SQR_SIZE*4         ; Move back to start of row
