@@ -1,3 +1,16 @@
+; Assignment 2 - Tetris
+; Participants
+;       Sean Heintz - 10053525
+;       Brent Glowinski - 10060894
+; Notes
+;       Instead of using the 7 procedures, we used a more efficient method
+;       involving creating an array that points to arrays that define each 
+;       block. The data in these arrays are then copied into a matrix that
+;       contains the current block. This buffer is then used for all 'local'
+;       changes to the block.
+;       An email to Setareh confirmed that this method was acceptable.        
+
+
 [GLOBAL mystart]                ; Import start code.
 [EXTERN _rand]                  ; Import the random function.
 [EXTERN _srand]                 ; Import random seed func.
@@ -18,11 +31,14 @@ SQR_SIZE        equ 32          ; Size of a brick.
 RECT_S          equ SQR_SIZE-1  ; Size of a brick to draw. (1 pixel between).
 
 ; Collision data
+; Defining the mathematical boundaries of the playing field.
 FIELD_BOT       equ FIELD_Y + (FIELD_H * SQR_SIZE) + BORDER_W
 FIELD_RIGHT     equ FIELD_X + (FIELD_W * SQR_SIZE) + BORDER_W
 
+; The starting place for the block.
 BLOCK_X         equ FIELD_X + ((FIELD_W/2-2)*SQR_SIZE) + BORDER_W ; Starting x for block.
-BLOCK_Y         equ FIELD_Y + BORDER_W           ; Starting y for block.
+BLOCK_Y         equ FIELD_Y + BORDER_W  ; Starting y for block.
+; The block starts above the field so that it can be drawn.
 
 L_BLUE          equ 9           ; Light blue.
 D_BLUE          equ 1           ; Dark blue.
@@ -62,7 +78,7 @@ DELAY_FAST      equ 20000000    ; Fast delay for quick drop blocks (2x fast).
 DELAYAMOUNT     dd  DELAY_NORMAL; The amount to actually delay.
 
 [SECTION .bss]
-vidmode         resb 1
+vidmode         resb 1          ; Storage for the previous video mode.
 curBlock        resb 16         ; Reserve 16 bytes to store the current block in.
 curBlockType    resb 1          ; 0=I, 1=J, 2=L, 3=O, 4=S, 5=T, 6=Z
 curBlockColor   resd 1          ; Reserve a double for the color.
@@ -72,10 +88,13 @@ hasTranslated   resb 1          ; Byte to indicate whether the current block has
 atTop           resb 1          ; Flag for if we have gotten to the top yet.
 
 [SECTION .text]
-mystart:
-        call    setSVGAMode     ; Set the SVGA drawing mode.
 
-        call    drawBorder      ; Draw the border around the field.
+; mystart
+; Entry position for the code.
+mystart:
+        call    setSVGAMode             ; Set the SVGA drawing mode.
+
+        call    drawBorder              ; Draw the border around the field.
 
         push    dword [RAND_SEED]       ; Set the seed.
         call    _srand                  ; Call srand. Set a seed for random.
@@ -88,12 +107,15 @@ mystart:
         push    dword [DELAYAMOUNT]     ; Wait for n cycles before continuing.
         call    delay                   ; Delay function.
         
-        push    dword curBlock
-        push    dword SQR_SIZE
-        call    translateDown
-        cmp     dword [curY], FIELD_BOT-SQR_SIZE
-        jl      .finLoop
-        call    newBlock
+        push    dword curBlock          ; Push the block that we're looking to translate.
+        push    dword SQR_SIZE          ; Push the amount that we want to translate by.
+        call    translateDown           ; Translate the block.
+        
+        ; Just a hard boundary check in case something in the translation phase fails.
+        ; Essentially a fail safe to prevent seg and page faults.
+        cmp     dword [curY], FIELD_BOT-SQR_SIZE        
+        jl      .finLoop        ; If we're in bounds, don't do anything.        
+        call    newBlock        ; Otherwise, get a new block.
         .finLoop:
 
         loop    .dloop
@@ -186,62 +208,57 @@ translateDown:
         mov     eax, [curY]     ; Get the current y position.
         mov     ebx, [curX]     ; Get the current x position.
         mov     edx, [ebp+12]   ; Get the buffer.
-
+        
+        ; The idea here is to erase the previous block, and then check for collision.
+        ; This allows us to check everything entirely on the lfb instead of making use of
+        ; other buffers.
+        
+        ; Erase the old block.
         push    dword BLACK     ; Draw black.
         push    edx             ; Push the current block.
         push    eax             ; Push the y position.
         push    ebx             ; Push the x position.
         call    drawBlock       ; Draw black over the previous shape.
 
-        push    eax
-        push    edx
+        push    eax             ; Save the current y position (not for function).
+        
+        ; Collision detection.
+        push    edx             ; Push in the buffer that we're translating.
         call    collDown        ; Check if there will be a collision
         cmp     al, 1           ; Check if there was a collision
-        je      .coll
-        pop     eax
+        je      .coll           ; If there was, handle it.
+                                
+        pop     eax             ; Restore the y position.
         add     eax, [ebp+8]    ; Add the offset if there was no collision
-        jmp     .draw
+        jmp     .draw           ; Continue with the drawing process.
+        
         .coll:
-        pop     eax
-        mov     cl, 1           ; Set flag to reset block at end
+        pop     eax             ; Restore the y position.
+        mov     cl, 1           ; Set flag to indicate that a new block must be generasted at the end.
         cmp     [hasTranslated], byte 1 ; Check if the block has translated yet.
         je      .draw           ; If we have translated, continue drawing.
         mov     [atTop], byte 1 ; Otherwise, we must be at the top of the field, so set the flag to 1.
         .draw:
-        push    dword [curBlockColor]       ; Push the color.
-        push    edx             ; Push the block.
-        push    eax             ; Push the y position
-        push    ebx             ; Push the x position.
-        call    drawBlock       ; Draw the block.
+        
+        ; Draw the new block after collision detection and translation.
+        push    dword [curBlockColor]   ; Push the color.
+        push    edx                     ; Push the block.
+        push    eax                     ; Push the y position
+        push    ebx                     ; Push the x position.
+        call    drawBlock               ; Draw the block.
 
-        mov     [curY], eax     ; Store curY again.
+        mov     [curY], eax             ; Store curY again.
 
         mov     [hasTranslated], byte 1 ; Set the translation flag.
-        cmp     cl, 1
-        jne     .end
+        cmp     cl, 1                   ; If the new block flag is set, we must generate a new block.
+        jne     .end                    ; Otherwise, we exit the function.
         mov     [hasTranslated], byte 0 ; Clear the translation flag.
         call    newBlock
         .end:
-        popad                   ; Restore registers.
-        leave                   ; Destroy the frame.
-        ret     8               ; Return to caller. Stack offset 8.
-
-; drawT(x, y)
-; Draws a T block starting at position x, y
-; Input:        x: The x coordinate.
-;               y: The y coordinate.
-drawT:
-        enter   0, 0            ; Enter the function.
-
-        push    dword PURPLE    ; Set color to purple
-        push    dword TBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-
-        leave                   ; Destroy frame.
-        ret     8               ; Return to caller.
-
+        popad                           ; Restore registers.
+        leave                           ; Destroy the frame.
+        ret     8                       ; Return to caller. Stack offset 8.
+        
 ; delay(amount)
 ; Runs a loop to delay the program for some number of iterations.
 ; Input:        amount: The number of iterations to delay for. Larger = More delay.
@@ -257,53 +274,6 @@ delay:
         leave                           ; Destroy frame.
         ret     4                       ; Return to caller. Offset 4.
 
-; drawS(x, y)
-; Draws a S block starting at position x, y
-; Input:        x: The x coordinate.
-;               y: The y coordinate.
-drawS:
-        enter   0, 0            ; Enter the function.
-
-        push    dword L_GREEN   ; Set color to light green
-        push    dword SBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-
-        leave                   ; Destroy frame.
-        ret     8               ; Return to caller.        
-
-; drawJ(x, y)
-; Draws a J block starting at position x, y
-; Input:        x: The x coordinate.
-;               y: The y coordinate.
-drawJ:
-        enter   0, 0            ; Enter the function.
-
-        push    dword D_BLUE    ; Set color to light green
-        push    dword JBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-
-        leave                   ; Destroy frame.
-        ret     8               ; Return to caller.
-
-; drawI(x, y)
-; Draws an I block starting at position x, y
-; Input:        x: The x coordinate.
-;               y: The y coordinate.
-drawI:
-        enter   0, 0            ; Enter the function.
-
-        push    dword L_BLUE    ; Set color to light green
-        push    dword IBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-        
-        leave                   ; Destroy stack frame.
-        ret     8               ; Return to caller.
 
 ; drawBlock(x, y, buffer, color)
 ; Draws a block at the specified coordinates (x, y) from the buffer.
@@ -311,7 +281,6 @@ drawI:
 ;               y: y coord.
 ;          buffer: the buffer in which the block is stored.
 ;           color: the color of the block
-; Output:     eax: The current offset of the block in the lfb.
 drawBlock:
         enter   0, 0            ; Enter the function.
         pushad                  ; Save registers.
@@ -345,8 +314,8 @@ drawBlock:
 
         popad                   ; Restore registers.
         leave                   ; Destroy frame.
-        ret     16              ; Offset stack by 12, return to caller.
-        
+        ret     16              ; Offset stack by 12, return to caller.        
+   
 ; drawRect(x, y, w, h, color)
 ; Draws a rectangle at the specified coordinates with width w and height h.
 ; Input:        x: The x coordinate at which to draw the rect.
@@ -368,12 +337,12 @@ drawRect:
         add     eax, ecx        ; Add height to y.               
 
         push    dword [ebp + 24]; Push the color.
-        push    eax         ; Push the y value.
+        push    eax             ; Push the y value.
 
         ; Calculate x value.
         mov     eax, [ebp + 8]  ; Set eax to x value
         add     eax, ebx        ; Add ebx to eax..
-        push    eax       ; Push the x value.
+        push    eax             ; Push the x value.
         call    drawPixel       ; Draw the pixel.
 
         dec     ebx             ; Decrement x.
@@ -385,57 +354,6 @@ drawRect:
         pop     ecx             ; Restore ecx.
         leave                   ; Destroy frame.
         ret     20              ; Offset stack by 20 bytes.
-
-; drawL(x, y)
-; Draws an L block at the given location.
-; Input:        x: x coordinate of the upper left corner of the shape
-;               y: y coordinate "                                   "
-; Output:       L block drawn on screen
-drawL:
-        enter   0,0
-
-        push    dword ORANGE    ; Set color to orange.
-        push    dword LBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-
-        leave
-        ret     8
-        
-; drawO(x, y)
-; Draws an O block at the given location.
-; Input:        x: x coordinate of the upper left corner of the shape
-;               y: y coordinate "                                   "
-; Output:       O block drawn on screen
-drawO:
-        enter   0,0
-
-        push    dword YELLOW    ; Set color to yellow
-        push    dword OBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-
-        leave
-        ret     8
-
-; drawZ(x, y)
-; Draws a Z block at the given location.
-; Input:        x: x coordinate of the upper left corner of the shape
-;               y: y coordinate "                                   "
-; Output:       Z block drawn on screen
-drawZ:
-        enter   0,0
-
-        push    dword L_RED     ; Set color to red.
-        push    dword ZBLOCK    ; Set buffer.
-        push    dword [ebp+12]  ; Set y coordinate
-        push    dword [ebp+8]   ; Set x coorindate
-        call    drawBlock      ; Draw the buffer.
-
-        leave
-        ret     8
 
 ; drawPixel(x, y, color)
 ; Draws a pixel at the specified spot on the screen.
@@ -481,7 +399,7 @@ drawBorder:
         push    dword FIELD_Y+BORDER_W ; Upper left y coord
         push    dword FIELD_X+BORDER_W ; Upper left x coord
         call    drawRect        ; Draw outer rectangle
-        ret
+        ret                     ; Return to calling code.
         
 ; random()
 ; Returns a random number from 0 to 6 in eax
@@ -501,7 +419,7 @@ newBlock:
         enter   0,0
         pushad
         mov     dword [curBlock], 0     ; Clears out current block buffer
-        mov     dword [curBlock+4], 0
+        mov     dword [curBlock+4], 0  
 
         call    random                  ; Number from 0-6 in eax
         mov     [curBlockType], al      ; Move random number into block type
@@ -514,12 +432,20 @@ newBlock:
         mov     [curBlockColor], eax    ; Stores colour
         push    dword [ebx]             ; Push block address
         push    dword curBlock          ; Push offset to block buffer
-        call    copyBlock               ; Copies preset block to current block buffer
-        mov     [curY], dword BLOCK_Y
+        call    copyBlock               ; Copies preset block to current block buffer 
+        mov     [curY], dword BLOCK_Y   ; Set the x and y positions of the blocks.
         mov     [curX], dword BLOCK_X
-        popad
-        leave
-        ret
+
+        ; Draw the block initially so that we dont miss the first iteration.
+        push    dword [curBlockColor]   ; Push the color.
+        push    dword curBlock          ; Push the buffer.
+        push    dword [curY]            ; Push the Y pos.
+        push    dword [curX]            ; Push the X pos.
+        call    drawBlock               ; Draw the block.
+
+        popad                           ; Restore the saved registers.
+        leave                           ; Destroy the frame.
+        ret                             ; Return to caller.
 
 ; A function to set the videomode to SVGA so that we can start
 ; to draw to the screen.
