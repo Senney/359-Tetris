@@ -26,17 +26,19 @@ FIELD_Y         equ 20          ; ""
 FIELD_W         equ 10          ; Size of the playing field in brick cells.
 FIELD_H         equ 20          ; ""
 
-BORDER_W        equ 5           ; Set the width of the border.
+BORDER_W        equ 31           ; Set the width of the border.
 SQR_SIZE        equ 32          ; Size of a brick.
 RECT_S          equ SQR_SIZE-1  ; Size of a brick to draw. (1 pixel between).
 
 ; Collision data
 ; Defining the mathematical boundaries of the playing field.
+FIELD_TOP       equ FIELD_Y + BORDER_W
 FIELD_BOT       equ FIELD_Y + (FIELD_H * SQR_SIZE) + BORDER_W
 FIELD_RIGHT     equ FIELD_X + (FIELD_W * SQR_SIZE) + BORDER_W
+FIELD_LEFT      equ FIELD_X + BORDER_W
 
 ; The starting place for the block.
-BLOCK_X         equ FIELD_X + ((FIELD_W/2-2)*SQR_SIZE) + BORDER_W ; Starting x for block.
+BLOCK_X         equ FIELD_X + ((FIELD_W/2-2)*SQR_SIZE) + SQR_SIZE + BORDER_W ; Starting x for block.
 BLOCK_Y         equ FIELD_Y + BORDER_W  ; Starting y for block.
 ; The block starts above the field so that it can be drawn.
 
@@ -70,7 +72,7 @@ BLOCKS          dd IBLOCK,JBLOCK,LBLOCK,OBLOCK,SBLOCK,TBLOCK,ZBLOCK
 COLORS          dd L_BLUE,D_BLUE,ORANGE,YELLOW,L_GREEN,PURPLE,L_RED
 
 ; Seed for the random number generator.
-RAND_SEED       dd 0xBEEFCA5E
+RAND_SEED       dd 0xB33FC453
 
 ; Number of iterations for the delay.
 DELAY_NORMAL    equ 40000000    ; Normal delay for quick drop blocks.
@@ -110,12 +112,7 @@ mystart:
         push    dword curBlock          ; Push the block that we're looking to translate.
         push    dword SQR_SIZE          ; Push the amount that we want to translate by.
         call    translateDown           ; Translate the block.
-        
-        ; Just a hard boundary check in case something in the translation phase fails.
-        ; Essentially a fail safe to prevent seg and page faults.
-        cmp     dword [curY], FIELD_BOT-SQR_SIZE        
-        jl      .finLoop        ; If we're in bounds, don't do anything.        
-        call    newBlock        ; Otherwise, get a new block.
+
         .finLoop:
 
         loop    .dloop
@@ -126,26 +123,23 @@ mystart:
         call    restoreMode     ; Restore the video mode.
         ret
 
-; collDown(buffer)
-; Checks to see if a block buffer will collide if it moves down.
-; Input:        buffer: The buffer the block is stored in
-; Output:       1 in al if it will collide; 0 otherwise.
-collDown:
+; collide(x, y, buffer)
+; Checks to see if the given block collides with anything.
+; Input:        x: x-position of the block
+;               y: y-position of the block
+;          buffer: Buffer containing the block shape
+; Ouput:        1 in al if it will collide; 0 otherwise.
+collide:
         enter   0,0                     ; Create stack frame
         push    ebx                     ; Save registers
         push    ecx
         push    edx
         push    edi
         push    esi
-        mov     dword edx, [ebp+8]      ; Move the buffer into edx
+        mov     dword edx, [ebp+16]     ; Move the buffer into edx
 
-        mov     dword ebx, [curY]       ; Get the current Y position of the block.
-        mov     dword eax, [curX]       ; Current X position.
-
-        ; For our collision detection, we want to check the block below
-        ; the current block. This means we have to add SQR_SIZE to
-        ; the Y position.
-        add     ebx, SQR_SIZE           ; Add the size of one block to y.
+        mov     dword ebx, [ebp+12]     ; Get the current Y position of the block.
+        mov     dword eax, [ebp+8]      ; Current X position.
 
         add     ebx, 2                  ; Offset y position by 2 pixels.
         add     eax, 2                  ; Offset x position by 2 pixels.
@@ -165,9 +159,7 @@ collDown:
         cmp     byte [edx], 0           ; Check if there should be a block for current block
         je      .inEnd                  ; Skip rest if there isn't
         cmp     byte [es:esi], 0        ; Check if it's the frozen color.
-        jne     .collision              ; If it is, do the collision.
-        cmp     ebx, FIELD_BOT          ; Check if out of bounds.
-        jle     .inEnd                  ; If we are, collide.
+        je      .inEnd
         .collision:
         mov     al, 1                   ; Move 1 into al (collision found)
         jmp     .end                    ; Exit loop
@@ -192,6 +184,67 @@ collDown:
         pop     edx
         pop     ecx
         pop     ebx
+
+        leave                           ; Destroy stack frame
+        ret     12                      ; Return, 3 arguments
+
+; collDown(buffer)
+; Checks to see if a block buffer will collide if it moves down.
+; Input:        buffer: The buffer the block is stored in
+; Output:       1 in al if it will collide; 0 otherwise.
+collDown:
+        enter   0,0                     ; Create stack frame
+        push    ebx                     ; Save ebx
+
+        push    dword [ebp+8]           ; Push buffer
+        mov     ebx, [curY]             ; Get current y position
+        add     ebx, SQR_SIZE           ; Add for position of the next block down
+        push    dword ebx               ; Push next y position
+        push    dword [curX]            ; Push current x position
+        call    collide                 ; Checks to see if next block down collides
+        ; al set based on whether or not there was a collision
+
+        pop     ebx                     ; Restore ebx
+        leave                           ; Destroy stack frame
+        ret 4                           ; 1 argument
+
+; collLeft(buffer)
+; Checks to see if a block buffer will collide if it moves left.
+; Input:        buffer: The buffer the block is stored in
+; Output:       1 in al if it will collide; 0 otherwise.
+collLeft:
+        enter   0,0                     ; Create stack frame
+        push    ebx                     ; Save ebx
+
+        push    dword [ebp+8]           ; Push buffer
+        push    dword [curY]            ; Push current y position
+        mov     dword ebx, [curX]       ; Get current x position
+        sub     ebx, SQR_SIZE           ; Subtract one block to check to the left
+        push    dword ebx               ; Push modified x position
+        call    collide                 ; Checks to see if next block to the left collides
+        ; al set based on whether or not there was a collision
+
+        pop     ebx                     ; Restore ebx
+        leave                           ; Destroy stack frame
+        ret 4                           ; 1 argument
+
+; collRight(buffer)
+; Checks to see if a block buffer will collide if it moves right.
+; Input:        buffer: The buffer the block is stored in
+; Output:       1 in al if it will collide; 0 otherwise.
+collRight:
+        enter   0,0                     ; Create stack frame
+        push    ebx                     ; Save ebx
+
+        push    dword [ebp+8]           ; Push buffer
+        push    dword [curY]            ; Push current y position
+        mov     dword ebx, [curX]       ; Get current x position
+        add     ebx, SQR_SIZE           ; Add one block to check to the right
+        push    dword ebx               ; Push modified x position
+        call    collide                 ; Checks to see if next block to the left collides
+        ; al set based on whether or not there was a collision
+
+        pop     ebx                     ; Restore ebx
         leave                           ; Destroy stack frame
         ret 4                           ; 1 argument
         
@@ -258,6 +311,135 @@ translateDown:
         popad                           ; Restore registers.
         leave                           ; Destroy the frame.
         ret     8                       ; Return to caller. Stack offset 8.
+
+; translateLeft(amount, buffer)
+; Translates a block represented by a 4x4 buffer to the left by n.
+; Input:        amount: The amount to translate left by.
+;               buffer: The buffer in which the block is represented.
+; Output:
+;               The block is moved n pixels left.
+translateLeft:
+        enter   0, 0            ; Enter the function
+        pushad                  ; Push the registers on to the stack.
+
+        mov     eax, [curY]     ; Get the current y position.
+        mov     ebx, [curX]     ; Get the current x position.
+        mov     edx, [ebp+12]   ; Get the buffer.
+        
+        ; The idea here is to erase the previous block, and then check for collision.
+        ; This allows us to check everything entirely on the lfb instead of making use of
+        ; other buffers.
+        
+        ; Erase the old block.
+        push    dword BLACK     ; Draw black.
+        push    edx             ; Push the current block.
+        push    eax             ; Push the y position.
+        push    ebx             ; Push the x position.
+        call    drawBlock       ; Draw black over the previous shape.
+
+        push    eax
+        push    ebx             ; Save the current x position (not for function).
+        
+        ; Collision detection.
+        push    edx             ; Push in the buffer that we're translating.
+        call    collLeft        ; Check if there will be a collision
+        cmp     al, 1           ; Check if there was a collision
+        je      .coll           ; If there was, handle it.
+                                
+        pop     ebx             ; Restore the x position.
+        sub     ebx, [ebp+8]    ; Add the offset if there was no collision
+        jmp     .draw           ; Continue with the drawing process.
+        
+        .coll:
+        pop     ebx             ; Restore the x position.
+        mov     cl, 1           ; Set flag to indicate that a new block must be generasted at the end.
+        cmp     [hasTranslated], byte 1 ; Check if the block has translated yet.
+        je      .draw           ; If we have translated, continue drawing.
+        mov     [atTop], byte 1 ; Otherwise, we must be at the top of the field, so set the flag to 1.
+        .draw:
+        pop     eax
+        ; Draw the new block after collision detection and translation.
+        push    dword [curBlockColor]   ; Push the color.
+        push    edx                     ; Push the block.
+        push    eax                     ; Push the y position
+        push    ebx                     ; Push the x position.
+        call    drawBlock               ; Draw the block.
+
+        mov     [curX], ebx             ; Store curX again.
+
+        mov     [hasTranslated], byte 1 ; Set the translation flag.
+        cmp     cl, 1                   ; If the new block flag is set, we must generate a new block.
+        jne     .end                    ; Otherwise, we exit the function.
+        mov     [hasTranslated], byte 0 ; Clear the translation flag.
+        call    newBlock
+        .end:
+        popad                           ; Restore registers.
+        leave                           ; Destroy the frame.
+        ret     8                       ; Return to caller. Stack offset 8.
+
+; translateRight(amount, buffer)
+; Translates a block represented by a 4x4 buffer to the right by n.
+; Input:        amount: The amount to translate right by.
+;               buffer: The buffer in which the block is represented.
+; Output:
+;               The block is moved n pixels right.
+translateRight:
+        enter   0, 0            ; Enter the function
+        pushad                  ; Push the registers on to the stack.
+
+        mov     eax, [curY]     ; Get the current y position.
+        mov     ebx, [curX]     ; Get the current x position.
+        mov     edx, [ebp+12]   ; Get the buffer.
+        
+        ; The idea here is to erase the previous block, and then check for collision.
+        ; This allows us to check everything entirely on the lfb instead of making use of
+        ; other buffers.
+        
+        ; Erase the old block.
+        push    dword BLACK     ; Draw black.
+        push    edx             ; Push the current block.
+        push    eax             ; Push the y position.
+        push    ebx             ; Push the x position.
+        call    drawBlock       ; Draw black over the previous shape.
+        push    eax
+        push    ebx             ; Save the current x position (not for function).
+        
+        ; Collision detection.
+        push    edx             ; Push in the buffer that we're translating.
+        call    collRight       ; Check if there will be a collision
+        cmp     al, 1           ; Check if there was a collision
+        je      .coll           ; If there was, handle it.
+                                
+        pop     ebx             ; Restore the x position.
+        add     ebx, [ebp+8]    ; Add the offset if there was no collision
+        jmp     .draw           ; Continue with the drawing process.
+        
+        .coll:
+        pop     ebx             ; Restore the x position.
+        mov     cl, 1           ; Set flag to indicate that a new block must be generasted at the end.
+        cmp     [hasTranslated], byte 1 ; Check if the block has translated yet.
+        je      .draw           ; If we have translated, continue drawing.
+        mov     [atTop], byte 1 ; Otherwise, we must be at the top of the field, so set the flag to 1.
+        .draw:
+        pop     eax
+        ; Draw the new block after collision detection and translation.
+        push    dword [curBlockColor]   ; Push the color.
+        push    edx                     ; Push the block.
+        push    eax                     ; Push the y position
+        push    ebx                     ; Push the x position.
+        call    drawBlock               ; Draw the block.
+
+        mov     [curX], ebx             ; Store curX again.
+
+        mov     [hasTranslated], byte 1 ; Set the translation flag.
+        cmp     cl, 1                   ; If the new block flag is set, we must generate a new block.
+        jne     .end                    ; Otherwise, we exit the function.
+        mov     [hasTranslated], byte 0 ; Clear the translation flag.
+        call    newBlock
+        .end:
+        popad                           ; Restore registers.
+        leave                           ; Destroy the frame.
+        ret     8                       ; Return to caller. Stack offset 8.
         
 ; delay(amount)
 ; Runs a loop to delay the program for some number of iterations.
@@ -314,7 +496,7 @@ drawBlock:
 
         popad                   ; Restore registers.
         leave                   ; Destroy frame.
-        ret     16              ; Offset stack by 12, return to caller.        
+        ret     16              ; Offset stack by 16, return to caller.
    
 ; drawRect(x, y, w, h, color)
 ; Draws a rectangle at the specified coordinates with width w and height h.
