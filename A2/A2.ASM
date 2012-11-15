@@ -102,12 +102,18 @@ mystart:
         call    _srand                  ; Call srand. Set a seed for random.
         add     esp, 4                  ; Align the stack pointer.
         call    newBlock        
+          
+        call    kb_initialize           ; Start the keyboard ISR.
+        mov     ecx, dword [DELAYAMOUNT]; Set the delay.
 .dloop:
         cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
         je      .loopDone               ; If we're at the top, finish the game.
 
-        push    dword [DELAYAMOUNT]     ; Wait for n cycles before continuing.
-        call    delay                   ; Delay function.
+        mov     al, [raw_key]           ; Get the raw key.
+        cmp     al, 01h                 ; Compare al to escape code.
+        je      .loopDone               ; Finish the loop.
+
+        loop    .dloop                  ; Loop back until ecx is 0.
         
         push    dword curBlock          ; Push the block that we're looking to translate.
         push    dword SQR_SIZE          ; Push the amount that we want to translate by.
@@ -118,7 +124,7 @@ mystart:
         loop    .dloop
 
 .loopDone:
-        call    readChar        ; Wait for a character before exiting.
+        call    kb_destroy      ; Restore the old isr.
 
         call    restoreMode     ; Restore the video mode.
         ret
@@ -711,3 +717,140 @@ copyBlock:
         pop     esi
         leave                   ; Destroy the frame
         ret     8               ; Return to calling code
+        
+; KEYBOARD HANDLING
+; Access raw_key for current key code from the keyboard ISR.
+
+; kb_clearKey
+; Clears a key value to 0.
+kb_clearKey:
+        enter   0, 0            ; Create the frame.
+
+        mov     [raw_key], byte 0       ; Clear the key buffer.
+
+        leave                   ; Leave frame.
+        ret                     ; Return to code.
+
+; kb_initialize()
+; Sets up the new interrupt and locks relevant memory.
+kb_initialize:
+        enter   0, 0            ; Enter the frame.
+        pushad                  ; Push all registers.
+
+        call    lockMemory      ; Lock the memory that we use.
+        call    installHandler  ; Install the handler.
+
+        popad                   ; Restore all registers.
+        leave                   ; Destroy the frame.
+        ret                     ; Return to calling code.
+
+; kb_destroy()
+; Returns the old interrupt.
+kb_destroy:
+        enter   0, 0            ; Enter the frame.
+        pushad                  ; Save all registers.
+
+        call    removeHandler   ; Remove the old handler.
+
+        popad                   ; Restore registers.
+        leave                   ; Restore frame
+        ret                     ; Return to calling code.
+
+; newHandler()
+; The new handler that we'll be using for handling keyboard input.
+newHandler:
+        enter   0, 0            ; Enter the frame.
+        push    eax             ; Store eax.
+
+        in      al, 60h         ; Get the value of port 60h.
+        mov     [raw_key], al   ; Store the key that was grabbed.
+
+        ; Clear PIC
+        mov     al, 20h
+        out     20h, al
+
+        pop     eax             ; Restore eax.
+        leave                   ; leave the frame.
+        iret                    ; Return from the interrupt.
+end_newHandler:                 ; Dummy label to get the end of newHandler.
+
+; lockMemory()
+; A function to lock the memory for the old handlers code so that no paging
+; issues occur.
+lockMemory:
+        enter   0, 0            ; Enter the frame.
+        pushad                  ; Store all registers.
+
+        ; Lock the code section.
+        mov     ax, 0006h       ; Select the DPMI function.
+        mov     bx, cs          ; Get segment base of cs.
+        int     31h
+        shl     ecx, 16
+        mov     cx, dx          ; Use it to lock handler code.
+        add     ecx, newHandler
+        mov     ebx, ecx
+        shr     ebx, 16
+        mov     esi, end_newHandler - newHandler
+        mov     edi, esi
+        shr     esi, 16
+        mov     ax, 0600h
+        int     31h
+
+        ; Lock data section.
+        mov     ax, 0006h
+        mov     bx, cs
+        int     31h
+        shl     ecx, 16
+        mov     cx, dx
+        add     ecx, raw_key
+        mov     ebx, ecx
+        shr     ebx, 16
+        mov     esi, endData - raw_key  ; Get memory location of vars.
+        mov     edi, esi
+        shr     esi, 16
+        mov     ax, 0600h       ; DPMI to lock linear region.
+        int     31h
+
+        popad                   ; Restore registers.
+        leave                   ; Restore frame.
+        ret                     ; Return to calling code.
+
+; installHandler()
+; Installs the keyboard handler into 09h.
+installHandler:
+        enter   0, 0            ; Enter the function.
+        pushad                  ; Store all registers.
+
+        ; Save the old handler.
+        mov     ax, 204h        ; Use DPMI function to get current int
+        mov     bl, 9h          ; Get it for int 9h.
+        int     31h             ; Call the DPMI int.
+        mov     [oldHandler], cx        ; Store the selector.
+        mov     [oldHandleroff], ecx    ; Store the offset.
+
+        ; Install the new one.
+        mov     ax, 205h        ; Install new int.
+        mov     bl, 9h          ; Install in to 9h.
+        mov     cx, cs          ; Put CS as selector.
+        mov     edx, newHandler ; Set the handler offset.
+        int     31h             ; Call the DPMI int.
+
+        popad                   ; Retore all registers.
+        leave                   ; Restore the frame.
+        ret                     ; Return to caller.
+
+; removeHandler()
+; Removes the handler that we installed.
+removeHandler:
+        enter   0, 0            ; Enter the frame.
+        pushad                  ; Store all registers.
+
+        mov     ax, 205h        ; Use DPMI function to set interrupt.
+        mov     bl, 9h          ; Set the interrupt to use.
+        mov     cx, [oldHandler] ; Set the selector.
+        mov     edx, [oldHandleroff] ; Set the offset.
+        int     31h             ; DPMI interrupt.
+
+        popad                   ; Restore the registers.
+        leave                   ; Restore the frame.
+        ret                     ; Return to caller.
