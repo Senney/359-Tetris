@@ -16,3 +16,17 @@ __Brent Tasks__
 * ~~Randomize function (0...n)~~
 * ~~Calculate pixel offsets~~
 * ~~Collision detection~~
+
+Part Two
+========
+
+__Sean Tasks__
+* ~~Keyboard ISR~~
+* Block rotation
+
+__Brent Tasks__
+* ~~Left/Right Movement~~
+* Line Clearing
+
+__Unassigned__
+* Scoring mechanism
