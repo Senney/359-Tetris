@@ -27,6 +27,7 @@ __Sean Tasks__
 __Brent Tasks__
 * ~~Left/Right Movement~~
 * Line Clearing
+* Losing the game
 
 __Unassigned__
 * Scoring mechanism
