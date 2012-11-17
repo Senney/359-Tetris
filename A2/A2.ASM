@@ -155,10 +155,10 @@ mystart:
         ; Just a hard boundary check in case something in the translation phase fails.
         ; Essentially a fail safe to prevent seg and page faults.
         cmp     dword [curY], FIELD_BOT-SQR_SIZE        
-        jl      .finLoop        ; If we're in bounds, don't do anything.        
+        jl      .loopDone        ; If we're in bounds, don't do anything.        
         call    newBlock        ; Otherwise, get a new block.
         
-.finLoop:
+.loopDone:
         call    kb_destroy      ; Restore the old isr.
 
         call    restoreMode     ; Restore the video mode.
