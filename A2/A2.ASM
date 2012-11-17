@@ -91,7 +91,7 @@ atTop           resb 1          ; Flag for if we have gotten to the top yet.
 
 oldHandler      resw 1          ; Storage for old handler pointer.
 oldHandleroff   resd 1          ; old handler offset.
-raw_key         resb 1          ; Storage for the keypress
+raw_key         resb 1          ; Storage for the keypress.
 endData         resb 1          ; Marker for end of data section
 
 [SECTION .text]
