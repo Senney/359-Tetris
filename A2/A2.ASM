@@ -108,7 +108,8 @@ mystart:
         call    _srand                  ; Call srand. Set a seed for random.
         add     esp, 4                  ; Align the stack pointer.
         call    newBlock        
-          
+
+        mov     ecx, [DELAYAMOUNT]      ; Set the delay.
         call    kb_initialize           ; Start the keyboard ISR.
 .dloop:
         cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
@@ -116,7 +117,7 @@ mystart:
 
         mov     al, [raw_key]           ; Get the raw key.
         cmp     al, 01h                 ; Compare al to escape code.
-        je      near .loopDone          ; Finish the loop.
+        je      near .finLoop           ; Finish the loop.
         cmp     al, 0c8h                ; Check if pressed is uparrow.
         jne     .skipRotate             ; If it isn't, skip the rotate.
 
@@ -155,10 +156,14 @@ mystart:
         ; Just a hard boundary check in case something in the translation phase fails.
         ; Essentially a fail safe to prevent seg and page faults.
         cmp     dword [curY], FIELD_BOT-SQR_SIZE        
-        jl      .loopDone        ; If we're in bounds, don't do anything.        
+        jl      .loopDone       ; If we're in bounds, don't do anything.
         call    newBlock        ; Otherwise, get a new block.
-        
 .loopDone:
+        dec     ecx             ; Decrement the loop counter.
+        jmp     .dloop          ; Loop back to the top.
+
+.finLoop:
+
         call    kb_destroy      ; Restore the old isr.
 
         call    restoreMode     ; Restore the video mode.
