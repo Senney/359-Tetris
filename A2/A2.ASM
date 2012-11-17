@@ -89,6 +89,11 @@ curY            resd 1          ; Current y position.
 hasTranslated   resb 1          ; Byte to indicate whether the current block has moved yet.
 atTop           resb 1          ; Flag for if we have gotten to the top yet.
 
+oldHandler      resw 1          ; Storage for old handler pointer.
+oldHandleroff   resd 1          ; old handler offset.
+raw_key         resb 1          ; Storage for the keypress.
+endData         resb 1          ; marker for the end of data section.
+
 [SECTION .text]
 
 ; mystart
