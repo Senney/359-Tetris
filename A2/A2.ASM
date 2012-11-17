@@ -89,6 +89,11 @@ curY            resd 1          ; Current y position.
 hasTranslated   resb 1          ; Byte to indicate whether the current block has moved yet.
 atTop           resb 1          ; Flag for if we have gotten to the top yet.
 
+oldHandler      resw 1          ; Storage for old handler pointer.
+oldHandleroff   resd 1          ; old handler offset.
+raw_key         resb 1          ; Storage for the keypress
+endData         resb 1          ; Marker for end of data section
+
 [SECTION .text]
 
 ; mystart
@@ -104,16 +109,16 @@ mystart:
         call    newBlock        
           
         call    kb_initialize           ; Start the keyboard ISR.
-        mov     ecx, dword [DELAYAMOUNT]; Set the delay.
 .dloop:
+        mov     ecx, dword DELAY_NORMAL; Set the delay.
         cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
         je      .loopDone               ; If we're at the top, finish the game.
-
+        .iloop:
         mov     al, [raw_key]           ; Get the raw key.
         cmp     al, 01h                 ; Compare al to escape code.
         je      .loopDone               ; Finish the loop.
 
-        loop    .dloop                  ; Loop back until ecx is 0.
+        loop    .iloop                  ; Loop back until ecx is 0.
         
         push    dword curBlock          ; Push the block that we're looking to translate.
         push    dword SQR_SIZE          ; Push the amount that we want to translate by.
@@ -121,7 +126,7 @@ mystart:
 
         .finLoop:
 
-        loop    .dloop
+        jmp    .dloop
 
 .loopDone:
         call    kb_destroy      ; Restore the old isr.
@@ -358,10 +363,6 @@ translateLeft:
         
         .coll:
         pop     ebx             ; Restore the x position.
-        mov     cl, 1           ; Set flag to indicate that a new block must be generasted at the end.
-        cmp     [hasTranslated], byte 1 ; Check if the block has translated yet.
-        je      .draw           ; If we have translated, continue drawing.
-        mov     [atTop], byte 1 ; Otherwise, we must be at the top of the field, so set the flag to 1.
         .draw:
         pop     eax
         ; Draw the new block after collision detection and translation.
@@ -373,11 +374,6 @@ translateLeft:
 
         mov     [curX], ebx             ; Store curX again.
 
-        mov     [hasTranslated], byte 1 ; Set the translation flag.
-        cmp     cl, 1                   ; If the new block flag is set, we must generate a new block.
-        jne     .end                    ; Otherwise, we exit the function.
-        mov     [hasTranslated], byte 0 ; Clear the translation flag.
-        call    newBlock
         .end:
         popad                           ; Restore registers.
         leave                           ; Destroy the frame.
@@ -422,10 +418,6 @@ translateRight:
         
         .coll:
         pop     ebx             ; Restore the x position.
-        mov     cl, 1           ; Set flag to indicate that a new block must be generasted at the end.
-        cmp     [hasTranslated], byte 1 ; Check if the block has translated yet.
-        je      .draw           ; If we have translated, continue drawing.
-        mov     [atTop], byte 1 ; Otherwise, we must be at the top of the field, so set the flag to 1.
         .draw:
         pop     eax
         ; Draw the new block after collision detection and translation.
@@ -437,11 +429,6 @@ translateRight:
 
         mov     [curX], ebx             ; Store curX again.
 
-        mov     [hasTranslated], byte 1 ; Set the translation flag.
-        cmp     cl, 1                   ; If the new block flag is set, we must generate a new block.
-        jne     .end                    ; Otherwise, we exit the function.
-        mov     [hasTranslated], byte 0 ; Clear the translation flag.
-        call    newBlock
         .end:
         popad                           ; Restore registers.
         leave                           ; Destroy the frame.
@@ -635,6 +622,59 @@ newBlock:
         leave                           ; Destroy the frame.
         ret                             ; Return to caller.
 
+; checkLine()
+; Checks to see if a line has been filled on the game field.
+; Input:        none
+; Output:       Lines are cleared if they are full.
+;               Lines above are moved to appropriate places.
+;               Score is increased if line is cleared.
+checkLine:
+        enter   0,0             ; Create stack frame
+        pushad                  ; Store all registers
+
+        mov     ecx, 0          ; Clear out ecx
+
+        .outer:
+        mov     edx, FIELD_BOT + FIELD_RIGHT + 1  ; Move position of bottom corner into edx
+        mov     eax, SQR_SIZE   ; Move size of squares into accumulator
+        mul     ecx             ; Multiply by current row
+        mov     ebx, XRES       ; Get screen size
+        mul     ebx             ; Multiply by screen size (gets to actual row)
+        sub     edx, eax        ; Subtract to get current row position on screen
+        add     edx, 1          ; Move to edge of block
+        mov     ebx, 0          ; Clear out ebx
+        .inner:
+        cmp     byte [es:edx], 0; Check to see if there is a block at current location
+        je      .endinner       ; If not, jump to end
+
+        cmp     ebx, FIELD_W    ; Compare to max columns
+        jl      .inner          ; Jump to top of inner loop until all columns have been examined
+        push    ecx             ; Push current row
+        call    deleteLine      ; Delete current line
+        dec     ecx             ; Decrement current row (to check again with row previously above)
+        .endinner:
+        inc     ecx             ; Increment ecx to next row
+        .endouter:
+        cmp     ecx, FIELD_H    ; Compare to max rows
+        jl      .outer          ; Jump to top until all rows have been examined.
+
+        popad                   ; Restore all registers
+        leave                   ; Destroy stack frame
+        ret                     ; Return to caller
+
+; deleteLine(row)
+; Deletes the given row from the playing field and shifts all other lines down
+; Input:    row: The row to be deleted from the playfield.
+; Output:        Given row is deleted.
+;                Rows above are moved down.
+deleteLine:
+        enter   0,0
+        pushad
+
+        popad
+        leave
+        ret     4
+
 ; A function to set the videomode to SVGA so that we can start
 ; to draw to the screen.
 setSVGAMode:
@@ -769,6 +809,31 @@ newHandler:
         mov     al, 20h
         out     20h, al
 
+        cmp     byte [raw_key], 4dh     ; Check if right arrow was pressed
+        je      .callRight
+        cmp     byte [raw_key], 4bh     ; Check if left arrow was pressed
+        je      .callLeft
+        cmp     byte [raw_key], 50h     ; Check if down arrow was pressed
+        je      .callDown
+
+        jmp     .end
+        .callRight:
+        push    dword curBlock  ; Push current block buffer
+        push    dword SQR_SIZE  ; Push size of block
+        call    translateRight  ; Move block to the right
+        jmp     .end
+        .callLeft:
+        push    dword curBlock  ; Push current block buffer
+        push    dword SQR_SIZE  ; Push size of block
+        call    translateLeft  ; Move block to the right
+        jmp     .end
+        .callDown:
+        push    dword curBlock  ; Push current block buffer
+        push    dword SQR_SIZE  ; Push size of block
+        call    translateDown  ; Move block to the right
+        jmp     .end
+
+        .end:
         pop     eax             ; Restore eax.
         leave                   ; leave the frame.
         iret                    ; Return from the interrupt.
