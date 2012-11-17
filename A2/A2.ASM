@@ -59,7 +59,7 @@ FROZEN          equ 0xF         ; Light purple for frozen blocks.
 ; 1110 J block
 ; 0000
 ; 0000
-IBLOCK          db 1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0
+IBLOCK          db 0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0
 JBLOCK          db 1,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0
 SBLOCK          db 0,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0
 TBLOCK          db 0,1,0,0,1,1,1,0,0,0,0,0,0,0,0,0
@@ -111,25 +111,54 @@ mystart:
           
         call    kb_initialize           ; Start the keyboard ISR.
 .dloop:
-        mov     ecx, dword DELAY_NORMAL; Set the delay.
         cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
-        je      .loopDone               ; If we're at the top, finish the game.
-        .iloop:
+        ;je      .loopDone               ; If we're at the top, finish the game.
+
         mov     al, [raw_key]           ; Get the raw key.
         cmp     al, 01h                 ; Compare al to escape code.
-        je      .loopDone               ; Finish the loop.
+        je      near .loopDone          ; Finish the loop.
+        cmp     al, 0c8h                ; Check if pressed is uparrow.
+        jne     .skipRotate             ; If it isn't, skip the rotate.
 
-        loop    .iloop                  ; Loop back until ecx is 0.
-        
+        push    dword curBlock          ; Push the buffer.
+        call    eraseBlock              ; Erase the block.
+
+        push    dword curBlock          ; Push the buffer.
+        call    rotateCW                ; Rotate the block.
+        mov     [raw_key], byte 0       ; Clear the key.
+
+        ; Redraw the erased block.
+        push    dword [curBlockColor]   ; Push the color.
+        push    dword curBlock          ; Push the block.
+        push    dword [curY]            ; Push the y position
+        push    dword [curX]            ; Push the x position.
+        call    drawBlock               ; Draw the block.
+
+.skipRotate:
+        cmp     [raw_key], byte 50h     ; Check if down arror is... down.
+        jne     .resetSpeed             ; If it's not, skip.
+
+        mov     [DELAYAMOUNT], dword DELAY_FAST ; Set the delay time.
+        jmp     .skipFast                       ; Don't reset it.
+.resetSpeed:
+        mov     [DELAYAMOUNT], dword DELAY_NORMAL; Set back delay.
+.skipFast:
+        cmp     ecx, 0                  ; Should we move the block down?
+        jne     .skipDown               ; Don't move the block if the timer is not done.
         push    dword curBlock          ; Push the block that we're looking to translate.
         push    dword SQR_SIZE          ; Push the amount that we want to translate by.
         call    translateDown           ; Translate the block.
+        mov     ecx, [DELAYAMOUNT]      ; Reset the loop counter.
 
-        .finLoop:
-
-        jmp    .dloop
-
-.loopDone:
+.skipDown
+        
+        ; Just a hard boundary check in case something in the translation phase fails.
+        ; Essentially a fail safe to prevent seg and page faults.
+        cmp     dword [curY], FIELD_BOT-SQR_SIZE        
+        jl      .finLoop        ; If we're in bounds, don't do anything.        
+        call    newBlock        ; Otherwise, get a new block.
+        
+.finLoop:
         call    kb_destroy      ; Restore the old isr.
 
         call    restoreMode     ; Restore the video mode.
