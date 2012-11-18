@@ -76,7 +76,7 @@ RAND_SEED       dd 0xB33FC453
 
 ; Number of iterations for the delay.
 DELAY_NORMAL    equ 40000000    ; Normal delay for quick drop blocks.
-DELAY_FAST      equ 20000000    ; Fast delay for quick drop blocks (2x fast).
+DELAY_FAST      equ 8000000     ; Fast delay for quick drop blocks (2x fast).
 DELAYAMOUNT     dd  DELAY_NORMAL; The amount to actually delay.
 
 [SECTION .bss]
@@ -110,7 +110,7 @@ mystart:
         call    newBlock
         call    kb_initialize           ; Start the keyboard ISR.
 .dloop:
-        mov     ecx, dword DELAY_NORMAL ; Set the delay.
+        mov     ecx, [DELAYAMOUNT]       ; Set the delay.
         ;cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
         ;je      .loopDone               ; If we're at the top, finish the game.
         .iloop:
@@ -122,7 +122,9 @@ mystart:
         cmp     al, 4bh                 ; Check if left arrow
         je      .moveleft
         cmp     al, 50h                 ; Check if down arrow
-        je      .movedown
+        je      near .movedown
+        cmp     al, 0d0h                ; Check if down arrow released
+        je      near .movereset         ; Reset move speed.
         cmp     al, 0c8h                ; Check if pressed is uparrow.
         je      .Rotate                 ; If it is, rotate
         jmp     .botloop
@@ -157,10 +159,11 @@ mystart:
         jmp     .botloop
         
         .movedown:
-        push    dword curBlock          ; Push the block that we're looking to translate.
-        push    dword SQR_SIZE          ; Push the amount that we want to translate by.
-        call    translateDown           ; Translate the block.
-        mov     byte [raw_key], 0
+        mov     [DELAYAMOUNT], dword DELAY_FAST
+        jmp     .botloop
+
+        .movereset:
+        mov     [DELAYAMOUNT], dword DELAY_NORMAL
 
         .botloop:
         dec     ecx
@@ -829,6 +832,42 @@ deleteLine:
         popad
         leave
         ret     4
+        
+; dropLine(y, amt)
+; Drops a line down 1 block on the screen.
+; Input:        y: The y position of the line in pixels.
+;               amt: The amount to move it down.
+; Output:       The line is moved down by amt pixels.
+dropLine:
+        enter   0, 0                    ; enter the frame.
+        pushad                          ; Push all registers..
+
+        ; Find the y offset.
+        mov     edx, [ebp+8]
+        mov     edi, edx                ; Get the y position.
+        shl     edi, 10                 ; Multiply y by 1024.
+        add     edi, FIELD_LEFT         ; Get the left side of the field.
+
+        add     edx, [ebp+12]           ; Add on the new draw position.
+        mov     ecx, FIELD_W            ; Number of times to loop (width)
+        mov     ebx, FIELD_LEFT         ; Set x position.
+
+        .top:
+        mov     eax, [es:edi]           ; Get the color at the current block.
+        push    eax                     ; Push the color.
+        push    dword SQR_SIZE          ; Push the width.
+        push    dword SQR_SIZE          ; Push the height.
+        push    edx                     ; y position.
+        push    ebx                     ; x position.
+        call    drawRect                ; Draw the rectangle.
+
+        add     ebx, dword SQR_SIZE     ; Move to the next block.
+        add     edi, dword SQR_SIZE     ; Move to the next block.
+        loop    .top                    ; Loop back to top until done.
+
+        popad
+        leave
+        ret     8                       ; Restore 8 bytes
 
 ; A function to set the videomode to SVGA so that we can start
 ; to draw to the screen.
