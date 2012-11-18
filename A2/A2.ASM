@@ -116,7 +116,7 @@ mystart:
         .iloop:
         mov     al, [raw_key]           ; Get the raw key.
         cmp     al, 01h                 ; Compare al to escape code.
-        je      .loopDone               ; Finish the loop.
+        je      near .finLoop               ; Finish the loop.
         cmp     al, 4dh                 ; Check if right arrow
         je      .moveright
         cmp     al, 4bh                 ; Check if left arrow
@@ -125,8 +125,8 @@ mystart:
         je      .movedown
         cmp     al, 0c8h                ; Check if pressed is uparrow.
         je      .Rotate                 ; If it is, rotate
-	jmp	.botloop
-	.Rotate:
+        jmp     .botloop
+        .Rotate:
         push    dword curBlock          ; Push the buffer.
         call    eraseBlock              ; Erase the block.
 
@@ -156,23 +156,20 @@ mystart:
         mov     byte [raw_key], 0       ; Clear out the pressed key
         jmp     .botloop
         
-	.movedown:       
+        .movedown:
         push    dword curBlock          ; Push the block that we're looking to translate.
         push    dword SQR_SIZE          ; Push the amount that we want to translate by.
         call    translateDown           ; Translate the block.
-        mov     ecx, [DELAYAMOUNT]      ; Reset the loop counter.
+        mov     byte [raw_key], 0
 
         .botloop:
-        loop    .iloop                  ; Loop back until ecx is 0.
+        dec     ecx
+        cmp     ecx, 0
+        jne     near .iloop
 
-
-.skipDown
-        
-        ; Just a hard boundary check in case something in the translation phase fails.
-        ; Essentially a fail safe to prevent seg and page faults.
-        cmp     dword [curY], FIELD_BOT-SQR_SIZE        
-        jl      .loopDone       ; If we're in bounds, don't do anything.
-        call    newBlock        ; Otherwise, get a new block.
+        push    dword curBlock
+        push    dword SQR_SIZE
+        call    translateDown
 .loopDone:
         dec     ecx             ; Decrement the loop counter.
         jmp     .dloop          ; Loop back to the top.
