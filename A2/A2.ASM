@@ -14,6 +14,7 @@
 [GLOBAL mystart]                ; Import start code.
 [EXTERN _rand]                  ; Import the random function.
 [EXTERN _srand]                 ; Import random seed func.
+[EXTERN _printf]                ; Printf for score printing.
 
 [SECTION .data]
 svgaMode        equ 4F02h
@@ -26,9 +27,9 @@ FIELD_Y         equ 20          ; ""
 FIELD_W         equ 10          ; Size of the playing field in brick cells.
 FIELD_H         equ 20          ; ""
 
-BORDER_W        equ 31           ; Set the width of the border.
 SQR_SIZE        equ 32          ; Size of a brick.
 RECT_S          equ SQR_SIZE-1  ; Size of a brick to draw. (1 pixel between).
+BORDER_W        equ RECT_S+2    ; Set the width of the border.
 
 ; Collision data
 ; Defining the mathematical boundaries of the playing field.
@@ -71,13 +72,20 @@ ZBLOCK          db 1,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0
 BLOCKS          dd IBLOCK,JBLOCK,LBLOCK,OBLOCK,SBLOCK,TBLOCK,ZBLOCK
 COLORS          dd L_BLUE,D_BLUE,ORANGE,YELLOW,L_GREEN,PURPLE,L_RED
 
+SCORE           dd      0
+LINE_SCORE      equ     10
+
 ; Seed for the random number generator.
-RAND_SEED       dd 0xB33FC453
+RAND_SEED       dd 0xF337CA75
 
 ; Number of iterations for the delay.
 DELAY_NORMAL    equ 40000000    ; Normal delay for quick drop blocks.
 DELAY_FAST      equ 8000000     ; Fast delay for quick drop blocks (2x fast).
 DELAYAMOUNT     dd  DELAY_NORMAL; The amount to actually delay.
+
+introString     db "Welcome to Tetris, by Sean Heintz and Brent Glowinski", 13, 10, "$"
+instructions    db "Enter any integer so we have a random seed to work with!", 13, 10, "$"
+scoreString     db "Your score was: %d", 13, 10, 0
 
 [SECTION .bss]
 vidmode         resb 1          ; Storage for the previous video mode.
@@ -101,7 +109,6 @@ endData         resb 1          ; Marker for end of data section
 ; Entry position for the code.
 mystart:
         call    setSVGAMode             ; Set the SVGA drawing mode.
-
         call    drawBorder              ; Draw the border around the field.
 
         push    dword [RAND_SEED]       ; Set the seed.
@@ -110,9 +117,9 @@ mystart:
         call    newBlock
         call    kb_initialize           ; Start the keyboard ISR.
 .dloop:
-        mov     ecx, [DELAYAMOUNT]       ; Set the delay.
-        ;cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
-        ;je      .loopDone               ; If we're at the top, finish the game.
+        mov     ecx, [DELAYAMOUNT]      ; Set the delay.
+        cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
+        je      near .finLoop           ; If we're at the top, finish the game.
         .iloop:
         mov     al, [raw_key]           ; Get the raw key.
         cmp     al, 01h                 ; Compare al to escape code.
@@ -125,6 +132,8 @@ mystart:
         je      near .movedown
         cmp     al, 0d0h                ; Check if down arrow released
         je      near .movereset         ; Reset move speed.
+        cmp     al, 0b9h                ; Check if space
+        je      near .dropblock
         cmp     al, 0c8h                ; Check if pressed is uparrow.
         je      .Rotate                 ; If it is, rotate
         jmp     .botloop
@@ -157,9 +166,17 @@ mystart:
         call    translateLeft
         mov     byte [raw_key], 0       ; Clear out the pressed key
         jmp     .botloop
+
+        .dropblock:
+        mov     [DELAYAMOUNT], dword 1  ; Set the delay amount low for fast drop.
+        mov     byte [raw_key], 0       ; Clear pressed key.
+        mov     ecx, 1                  ; Set ecx to end of loop.
+        jmp     .botloop
         
         .movedown:
         mov     [DELAYAMOUNT], dword DELAY_FAST
+        mov     byte [raw_key], 0
+        mov     ecx, 1
         jmp     .botloop
 
         .movereset:
@@ -180,8 +197,13 @@ mystart:
 .finLoop:
 
         call    kb_destroy      ; Restore the old isr.
-
         call    restoreMode     ; Restore the video mode.
+
+        push    dword [SCORE]   ; Push the score.
+        push    dword scoreString     ; Push score string.
+        call    _printf         ; Print!
+        add     esp, 8          ; Re-align stack.
+        
         ret
 
 ; eraseBlock(buffer)
@@ -265,10 +287,19 @@ rotateCW:
         cmp     eax, 4                  ; Check if we're out of rows.
         jne     .outLoop                ; If we're not, go back to the outer loop.
 
+        push    dword tempBlock         ; Collision check on temp.
+        push    dword [curY]            ; Y pos
+        push    dword [curX]            ; X pos
+        call    collide
+
+        cmp     al, byte 1              ; Check if collision
+        je      .skipCopy               ; Don't copy.
         ; Copy the temporary array into the current block buffer.
         push    dword tempBlock         ; Push the temporary block.
         push    dword [ebp+8]           ; Push the current block.
         call    copyBlock
+
+        .skipCopy
         
         popad
         leave
@@ -458,6 +489,7 @@ translateDown:
         jne     .end                    ; Otherwise, we exit the function.
         mov     [hasTranslated], byte 0 ; Clear the translation flag.
         call    newBlock
+        mov     [DELAYAMOUNT], dword DELAY_NORMAL ; Reset delay amount.
         .end:
         popad                           ; Restore registers.
         leave                           ; Destroy the frame.
@@ -791,6 +823,25 @@ checkLine:
         loop    .inner
         push    eax             ; Push current row value
         call    deleteLine      ; Delete row
+
+        add     [SCORE], dword LINE_SCORE  ; Add to score.
+
+        push    eax
+
+        sub     eax, 1
+
+        .dropLoop:
+        push    dword SQR_SIZE
+        push    eax
+        call    dropLine
+
+        ; Decrement row counter.
+        dec     eax
+        cmp     eax, 0
+        jge     .dropLoop
+
+        pop     eax
+        
         .endinner:
         sub     ebx, edx                ; Move back to start of row
         add     ebx, SQR_SIZE * XRES    ; Move to next row
@@ -826,14 +877,12 @@ deleteLine:
         call    drawRect
         add     ebx, SQR_SIZE   ; Add for next square
         loop    .top            ; Jump to top until whole row is deleted
-
-
         
         popad
         leave
         ret     4
         
-; dropLine(y, amt)
+; dropLine(row, amt)
 ; Drops a line down 1 block on the screen.
 ; Input:        y: The y position of the line in pixels.
 ;               amt: The amount to move it down.
@@ -843,20 +892,24 @@ dropLine:
         pushad                          ; Push all registers..
 
         ; Find the y offset.
-        mov     edx, [ebp+8]
+        mov     edx, dword [ebp+8]      ; Get the row.
+        shl     edx, 5                  ; Multiply by 32 to get y pos.
+        add     edx, FIELD_TOP          ; Add the top of the field.
+        
         mov     edi, edx                ; Get the y position.
+        add     edi, 2                  ; Offset y by 2 pixels.
         shl     edi, 10                 ; Multiply y by 1024.
-        add     edi, FIELD_LEFT         ; Get the left side of the field.
+        add     edi, FIELD_LEFT+2       ; Get the left side of the field.
 
         add     edx, [ebp+12]           ; Add on the new draw position.
         mov     ecx, FIELD_W            ; Number of times to loop (width)
         mov     ebx, FIELD_LEFT         ; Set x position.
 
         .top:
-        mov     eax, [es:edi]           ; Get the color at the current block.
+        movzx   eax, byte [es:edi]      ; Get the color at the current block.
         push    eax                     ; Push the color.
-        push    dword SQR_SIZE          ; Push the width.
-        push    dword SQR_SIZE          ; Push the height.
+        push    dword RECT_S            ; Push the width.
+        push    dword RECT_S            ; Push the height.
         push    edx                     ; y position.
         push    ebx                     ; x position.
         call    drawRect                ; Draw the rectangle.
@@ -864,6 +917,10 @@ dropLine:
         add     ebx, dword SQR_SIZE     ; Move to the next block.
         add     edi, dword SQR_SIZE     ; Move to the next block.
         loop    .top                    ; Loop back to top until done.
+
+        ; Delete the old line.
+        push    dword [ebp+8]           ; Push the row.
+        call    deleteLine              ; Delete the line.
 
         popad
         leave
@@ -923,6 +980,42 @@ readChar:
         mov     ah, 01h
         int     0f1h
         ret
+
+; A function to read a number of bytes from the keyboard.
+; Input:        edx - Buffer space, where the first byte is set to the size of the buffer.
+; Output:       Buffer space: First byte - Num chars. Rest: Data
+kbBufferRead:
+        mov     ah, 0Ah
+        int     0f1h
+        ret
+
+; A function to get buffered input from the keyboard and null terminate it.
+; Input:        Buffer location
+;               Buffer size
+; Output:       Buffer contains null-terminated input.
+getBufferedInput:
+        push    ebp             ; Save base pointer
+        mov     ebp, esp        ; Update base pointer.
+
+        push    edx             ; Save edx
+        push    eax             ; Save eax
+        
+        mov     edx, [ebp + 8]  ; Grab the buffer location.
+        mov     eax, [ebp + 12]  ; Grab the buffer size.
+        mov     [edx], eax      ; Set the buffer size.
+        mov     [edx+1], byte 0 ; Character reuse.
+        call    kbBufferRead    ; Call the read function.
+
+        mov     edx, [ebp + 8]  ; Reload the buffer location.
+        movzx   eax, byte [edx + 1]  ; Get the number of chars read.
+        mov     [edx+eax+2], byte 0     ; Null terminate the string.
+        
+        pop     eax             ; Restore eax
+        pop     edx             ; Restore edx
+
+        mov     esp, ebp        ; Restore the stack pointer.
+        pop     ebp             ; Restore the base pointer
+        ret     8               ; Return to calling code.
 
 ; copyBlock(dest, src)
 ; Copies the content of one block array to another. 4x4 arrays!
