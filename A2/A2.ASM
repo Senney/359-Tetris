@@ -59,7 +59,7 @@ FROZEN          equ 0xF         ; Light purple for frozen blocks.
 ; 1110 J block
 ; 0000
 ; 0000
-IBLOCK          db 1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0
+IBLOCK          db 0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0
 JBLOCK          db 1,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0
 SBLOCK          db 0,1,1,0,1,1,0,0,0,0,0,0,0,0,0,0
 TBLOCK          db 0,1,0,0,1,1,1,0,0,0,0,0,0,0,0,0
@@ -82,6 +82,7 @@ DELAYAMOUNT     dd  DELAY_NORMAL; The amount to actually delay.
 [SECTION .bss]
 vidmode         resb 1          ; Storage for the previous video mode.
 curBlock        resb 16         ; Reserve 16 bytes to store the current block in.
+tempBlock       resb 16         ; Temporary storage for 16 bytes for block rotation.
 curBlockType    resb 1          ; 0=I, 1=J, 2=L, 3=O, 4=S, 5=T, 6=Z
 curBlockColor   resd 1          ; Reserve a double for the color.
 curX            resd 1          ; Current x position.
@@ -122,41 +123,157 @@ mystart:
         je      .moveleft
         cmp     al, 50h                 ; Check if down arrow
         je      .movedown
+        cmp     al, 0c8h                ; Check if pressed is uparrow.
+        je      .Rotate                 ; If it is, rotate
+	jmp	.botloop
+	.Rotate:
+        push    dword curBlock          ; Push the buffer.
+        call    eraseBlock              ; Erase the block.
+
+        push    dword curBlock          ; Push the buffer.
+        call    rotateCW                ; Rotate the block.
+        mov     [raw_key], byte 0       ; Clear the key.
+
+        ; Redraw the erased block.
+        push    dword [curBlockColor]   ; Push the color.
+        push    dword curBlock          ; Push the block.
+        push    dword [curY]            ; Push the y position
+        push    dword [curX]            ; Push the x position.
+        call    drawBlock               ; Draw the block.
         jmp     .botloop
+
         .moveright:
         push    dword curBlock
         push    dword SQR_SIZE
         call    translateRight
         mov     byte [raw_key], 0       ; Clear out the pressed key
         jmp     .botloop
+
         .moveleft:
         push    dword curBlock
         push    dword SQR_SIZE
         call    translateLeft
         mov     byte [raw_key], 0       ; Clear out the pressed key
         jmp     .botloop
-        .movedown:
-        push    dword curBlock
-        push    dword SQR_SIZE
-        call    translateDown
-        mov     byte [raw_key], 0       ; Clear out the pressed key
-        .botloop:
-        loop    .iloop                  ; Loop back until ecx is 0.
         
+	.movedown:       
         push    dword curBlock          ; Push the block that we're looking to translate.
         push    dword SQR_SIZE          ; Push the amount that we want to translate by.
         call    translateDown           ; Translate the block.
+        mov     ecx, [DELAYAMOUNT]      ; Reset the loop counter.
 
-        .finLoop:
+        .botloop:
+        loop    .iloop                  ; Loop back until ecx is 0.
 
-        jmp    .dloop
 
+.skipDown
+        
+        ; Just a hard boundary check in case something in the translation phase fails.
+        ; Essentially a fail safe to prevent seg and page faults.
+        cmp     dword [curY], FIELD_BOT-SQR_SIZE        
+        jl      .loopDone       ; If we're in bounds, don't do anything.
+        call    newBlock        ; Otherwise, get a new block.
 .loopDone:
+        dec     ecx             ; Decrement the loop counter.
+        jmp     .dloop          ; Loop back to the top.
+
+.finLoop:
+
         call    kb_destroy      ; Restore the old isr.
 
         call    restoreMode     ; Restore the video mode.
         ret
 
+; eraseBlock(buffer)
+; Erases the block in the buffer by overwriting it with block.
+; Input:        buffer: The current block buffer.
+; Output:       The block is erased from the screen.
+eraseBlock:
+        enter   0, 0
+
+        ; Erase the old block.
+        push    dword BLACK     ; Draw black.
+        push    dword [ebp+8]   ; Push the current block.
+        push    dword [curY]    ; Push the y position.
+        push    dword [curX]    ; Push the x position.
+        call    drawBlock       ; Draw black over the previous shape.        
+
+        leave
+        ret     4
+
+; rotateCW(buffer)
+; Rotates the block in the buffer 90 degrees clockwise.
+; Input:        buffer: the buffer the block is stored in.
+; Output:       buffer contains a 90 degree rotated block.
+rotateCW:
+        enter   0, 0                   ; Create stack frame. 16 bytes
+                                        ; of space for array to copy new into.
+        pushad                          ; Store all registers.
+
+        mov     edi, [ebp+8]            ; Get the block buffer.
+
+        ; Clear out the tempBlock before use.
+        mov     ecx, 0                  ; Set buffer size.
+.clear:
+        mov     [ecx+tempBlock], byte 0 ; Clear the memory location.
+        inc     ecx                     ; Increment counter
+        cmp     ecx, 16                 ; Check if at end of buffer.
+        jne     .clear                  ; Keep clearing.
+        
+        mov     eax, 0                  ; Cur y counter.
+        .outLoop:
+        mov     ecx, 0                  ; cur x counter.
+        .inLoop:
+        cmp     byte [edi], 0           ; Check if there is a block here to move.
+        je      .inEnd                  ; Skip rest if there isn't
+        
+        ; Here we will rotate the block.
+        ; xnew = y0 - yold + x0         ; x0 = 1
+        ; simplify to xnew = y0 + x0 - yold
+        ;             xnew = 2 - yold
+        ; ynew = xold - x0 + y0         ; y0 = 1
+        ; simplify to ynew = xold since -x0 + y0 = 0
+        ; ebx = xnew
+        ; edx = ynew
+
+        mov     ebx, 2                  ; Set xnew to (y0 + x0)
+        sub     ebx, eax                ; xnew = (y0+x0) - yold.
+
+        ; Hack to get the 4th cell of i block working.
+        cmp     ebx, 0                  ; Check if ebx < 0
+        jge     .skipYHack              ; If not, skip the hack.
+
+        mov     ebx, 3                  ; Set EBX to end of x buffer.
+        mov     edx, 1                  ; Set Y value to 1.
+        jmp     .finishHack             ; Finish the hack.
+.skipYHack
+        mov     edx, ecx                ; Set ynew = xold.
+
+.finishHack
+        shl     edx, 2                  ; Multiply ynew by 4.
+        add     edx, ebx                ; Add ebx.
+
+        mov     [edx+tempBlock], byte 1 ; Store a 1 at the location in
+                                        ; temp buffer.        
+        .inEnd:
+        inc     edi                     ; Move to next buffer location
+        inc     ecx                     ; Decrement x counter
+        cmp     ecx, 4                  ; Check if x is < 0
+        jne     .inLoop                 ; If not, loop back.
+
+        inc     eax                     ; Decrement outer loop.
+        cmp     eax, 4                  ; Check if we're out of rows.
+        jne     .outLoop                ; If we're not, go back to the outer loop.
+
+        ; Copy the temporary array into the current block buffer.
+        push    dword tempBlock         ; Push the temporary block.
+        push    dword [ebp+8]           ; Push the current block.
+        call    copyBlock
+        
+        popad
+        leave
+        ret     4        
+        
 ; collide(x, y, buffer)
 ; Checks to see if the given block collides with anything.
 ; Input:        x: x-position of the block
