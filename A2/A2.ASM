@@ -91,7 +91,7 @@ atTop           resb 1          ; Flag for if we have gotten to the top yet.
 
 oldHandler      resw 1          ; Storage for old handler pointer.
 oldHandleroff   resd 1          ; old handler offset.
-raw_key         resb 1          ; Storage for the keypress.
+raw_key         resb 1          ; Storage for the keypress
 endData         resb 1          ; Marker for end of data section
 
 [SECTION .text]
@@ -106,18 +106,41 @@ mystart:
         push    dword [RAND_SEED]       ; Set the seed.
         call    _srand                  ; Call srand. Set a seed for random.
         add     esp, 4                  ; Align the stack pointer.
-        call    newBlock        
-          
+        call    newBlock
         call    kb_initialize           ; Start the keyboard ISR.
 .dloop:
-        mov     ecx, dword DELAY_NORMAL; Set the delay.
-        cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
-        je      .loopDone               ; If we're at the top, finish the game.
+        mov     ecx, dword DELAY_NORMAL ; Set the delay.
+        ;cmp     byte [atTop], 1         ; Check if we're at the top of the playing field.
+        ;je      .loopDone               ; If we're at the top, finish the game.
         .iloop:
         mov     al, [raw_key]           ; Get the raw key.
         cmp     al, 01h                 ; Compare al to escape code.
         je      .loopDone               ; Finish the loop.
-
+        cmp     al, 4dh                 ; Check if right arrow
+        je      .moveright
+        cmp     al, 4bh                 ; Check if left arrow
+        je      .moveleft
+        cmp     al, 50h                 ; Check if down arrow
+        je      .movedown
+        jmp     .botloop
+        .moveright:
+        push    dword curBlock
+        push    dword SQR_SIZE
+        call    translateRight
+        mov     byte [raw_key], 0       ; Clear out the pressed key
+        jmp     .botloop
+        .moveleft:
+        push    dword curBlock
+        push    dword SQR_SIZE
+        call    translateLeft
+        mov     byte [raw_key], 0       ; Clear out the pressed key
+        jmp     .botloop
+        .movedown:
+        push    dword curBlock
+        push    dword SQR_SIZE
+        call    translateDown
+        mov     byte [raw_key], 0       ; Clear out the pressed key
+        .botloop:
         loop    .iloop                  ; Loop back until ecx is 0.
         
         push    dword curBlock          ; Push the block that we're looking to translate.
@@ -538,7 +561,7 @@ drawRect:
 ; Output:       Pixel is displayed on the screen.
 drawPixel:
         enter   0, 0            ; Create frame.
-        push    ebx             ; Push ebx.
+        push    eax             ; Push ebx.
         push    edi             ; Store dest index.
 
         ; Setup the pixel offset in the buffer.
@@ -551,7 +574,7 @@ drawPixel:
         stosb                   ; Store the pixel in es:edi
 
         pop     edi             ; Restore dest index.
-        pop     ebx             ; Restore ebx.
+        pop     eax             ; Restore ebx.
         leave                   ; Restore the stack frame
         ret     12              ; Return, 12 byte offset.
 
@@ -596,6 +619,8 @@ newBlock:
         mov     dword [curBlock], 0     ; Clears out current block buffer
         mov     dword [curBlock+4], 0  
 
+        call    checkLine               ; Check to see if a line has been filled
+
         call    random                  ; Number from 0-6 in eax
         mov     [curBlockType], al      ; Move random number into block type
         mov     ebx, 4
@@ -632,30 +657,26 @@ checkLine:
         enter   0,0             ; Create stack frame
         pushad                  ; Store all registers
 
-        mov     ecx, 0          ; Clear out ecx
-
+        mov     eax, 1          ; Clear eax
+        mov     ebx, FIELD_TOP+SQR_SIZE+2; Top of field (starting y-position)
+        shl     ebx, 10         ; Multiply by 1024
+        add     ebx, FIELD_LEFT+2;Add left side (starting x-position)
         .outer:
-        mov     edx, FIELD_BOT + FIELD_RIGHT + 1  ; Move position of bottom corner into edx
-        mov     eax, SQR_SIZE   ; Move size of squares into accumulator
-        mul     ecx             ; Multiply by current row
-        mov     ebx, XRES       ; Get screen size
-        mul     ebx             ; Multiply by screen size (gets to actual row)
-        sub     edx, eax        ; Subtract to get current row position on screen
-        add     edx, 1          ; Move to edge of block
-        mov     ebx, 0          ; Clear out ebx
+        mov     ecx, FIELD_W    ; Move number of columns into ecx
+        mov     edx, 0
         .inner:
-        cmp     byte [es:edx], 0; Check to see if there is a block at current location
-        je      .endinner       ; If not, jump to end
-
-        cmp     ebx, FIELD_W    ; Compare to max columns
-        jl      .inner          ; Jump to top of inner loop until all columns have been examined
-        push    ecx             ; Push current row
-        call    deleteLine      ; Delete current line
-        dec     ecx             ; Decrement current row (to check again with row previously above)
+        cmp     byte [es:ebx], 0; Check if there is a block
+        je      .endinner       ; Jump if there isn't
+        add     edx, SQR_SIZE   ; Add one block size to amount moved over
+        add     ebx, SQR_SIZE
+        loop    .inner
+        ; DELETE LINE HERE
         .endinner:
-        inc     ecx             ; Increment ecx to next row
+        sub     ebx, edx                ; Move back to start of row
+        add     ebx, SQR_SIZE * XRES    ; Move to next row
+        inc     eax             ; Increment eax to next row
         .endouter:
-        cmp     ecx, FIELD_H    ; Compare to max rows
+        cmp     eax, FIELD_H    ; Compare to max rows
         jl      .outer          ; Jump to top until all rows have been examined.
 
         popad                   ; Restore all registers
@@ -804,36 +825,10 @@ newHandler:
 
         in      al, 60h         ; Get the value of port 60h.
         mov     [raw_key], al   ; Store the key that was grabbed.
-
         ; Clear PIC
         mov     al, 20h
         out     20h, al
 
-        cmp     byte [raw_key], 4dh     ; Check if right arrow was pressed
-        je      .callRight
-        cmp     byte [raw_key], 4bh     ; Check if left arrow was pressed
-        je      .callLeft
-        cmp     byte [raw_key], 50h     ; Check if down arrow was pressed
-        je      .callDown
-
-        jmp     .end
-        .callRight:
-        push    dword curBlock  ; Push current block buffer
-        push    dword SQR_SIZE  ; Push size of block
-        call    translateRight  ; Move block to the right
-        jmp     .end
-        .callLeft:
-        push    dword curBlock  ; Push current block buffer
-        push    dword SQR_SIZE  ; Push size of block
-        call    translateLeft  ; Move block to the right
-        jmp     .end
-        .callDown:
-        push    dword curBlock  ; Push current block buffer
-        push    dword SQR_SIZE  ; Push size of block
-        call    translateDown  ; Move block to the right
-        jmp     .end
-
-        .end:
         pop     eax             ; Restore eax.
         leave                   ; leave the frame.
         iret                    ; Return from the interrupt.
