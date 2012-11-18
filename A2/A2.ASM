@@ -204,7 +204,6 @@ mystart:
         call    kb_destroy      ; Restore the old isr.
         call    restoreMode     ; Restore the video mode.
 
-        call    _printf         ; Print!
         add     esp, 8          ; Re-align stack.
         
         ret
@@ -914,8 +913,6 @@ checkLine:
         loop    .inner
         push    eax             ; Push current row value
         call    deleteLine      ; Delete row
-
-        add     [SCORE], dword LINE_SCORE  ; Add to score.
 
         push    eax
 
