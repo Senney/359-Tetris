@@ -637,6 +637,7 @@ drawBlock:
 ;           color: The color of the rectangle.
 drawRect:
         enter   0, 0
+        push    eax
         push    ecx             ; Store ecx. Use as h counter.
         push    ebx             ; Store ebx. Use as w counter.
 
@@ -664,6 +665,7 @@ drawRect:
 
         pop     ebx             ; Restore ebx.
         pop     ecx             ; Restore ecx.
+        pop     eax
         leave                   ; Destroy frame.
         ret     20              ; Offset stack by 20 bytes.
 
@@ -771,7 +773,7 @@ checkLine:
         enter   0,0             ; Create stack frame
         pushad                  ; Store all registers
 
-        mov     eax, 1          ; Clear eax
+        mov     eax, 1          ; Set eax to 1
         mov     ebx, FIELD_TOP+SQR_SIZE+2; Top of field (starting y-position)
         shl     ebx, 10         ; Multiply by 1024
         add     ebx, FIELD_LEFT+2;Add left side (starting x-position)
@@ -784,7 +786,8 @@ checkLine:
         add     edx, SQR_SIZE   ; Add one block size to amount moved over
         add     ebx, SQR_SIZE
         loop    .inner
-        ; DELETE LINE HERE
+        push    eax             ; Push current row value
+        call    deleteLine      ; Delete row
         .endinner:
         sub     ebx, edx                ; Move back to start of row
         add     ebx, SQR_SIZE * XRES    ; Move to next row
@@ -805,7 +808,24 @@ checkLine:
 deleteLine:
         enter   0,0
         pushad
+        mov     eax, [ebp+8]    ; Get row to be deleted
+        mov     ebx, SQR_SIZE
+        mul     ebx             ; Multiply by square size
+        add     eax, FIELD_TOP  ; Add the top of the field
+        mov     ebx, FIELD_LEFT ; Get left side of field
+        mov     ecx, FIELD_W    ; Move field width into counter
+        .top:
+        push    dword 0         ; Black
+        push    dword SQR_SIZE  ; Width
+        push    dword SQR_SIZE  ; Height
+        push    eax             ; y-pos
+        push    ebx             ; x-pos
+        call    drawRect
+        add     ebx, SQR_SIZE   ; Add for next square
+        loop    .top            ; Jump to top until whole row is deleted
 
+
+        
         popad
         leave
         ret     4
