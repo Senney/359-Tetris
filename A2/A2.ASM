@@ -14,6 +14,7 @@
 [GLOBAL mystart]                ; Import start code.
 [EXTERN _rand]                  ; Import the random function.
 [EXTERN _srand]                 ; Import random seed func.
+[EXTERN _itoa]
 
 [SECTION .data]
 svgaMode        equ 4F02h
@@ -36,6 +37,9 @@ FIELD_TOP       equ FIELD_Y + BORDER_W
 FIELD_BOT       equ FIELD_Y + (FIELD_H * SQR_SIZE) + BORDER_W
 FIELD_RIGHT     equ FIELD_X + (FIELD_W * SQR_SIZE) + BORDER_W
 FIELD_LEFT      equ FIELD_X + BORDER_W
+
+SCORE_X         equ FIELD_RIGHT + BORDER_W*2
+SCORE_Y         equ FIELD_TOP
 
 ; The starting place for the block.
 BLOCK_X         equ FIELD_X + ((FIELD_W/2-2)*SQR_SIZE) + SQR_SIZE + BORDER_W ; Starting x for block.
@@ -89,6 +93,8 @@ curX            resd 1          ; Current x position.
 curY            resd 1          ; Current y position.
 hasTranslated   resb 1          ; Byte to indicate whether the current block has moved yet.
 atTop           resb 1          ; Flag for if we have gotten to the top yet.
+score           resd 1          ; Current score
+tempbuff        resd 1          ; Temporary buffer
 
 oldHandler      resw 1          ; Storage for old handler pointer.
 oldHandleroff   resd 1          ; old handler offset.
@@ -104,6 +110,8 @@ mystart:
 
         call    drawBorder              ; Draw the border around the field.
 
+        call    drawScore
+        
         push    dword [RAND_SEED]       ; Set the seed.
         call    _srand                  ; Call srand. Set a seed for random.
         add     esp, 4                  ; Align the stack pointer.
@@ -270,6 +278,94 @@ rotateCW:
         popad
         leave
         ret     4        
+
+; drawScore()
+; Draws the score on the screen.
+drawScore:
+        enter   0,0
+        pushad
+
+        push    dword 0         ; Black
+        push    dword 8         ; 8 pixels high
+        push    dword 8*32      ; 8wide*32 potential characters
+        push    dword SCORE_Y-1   ; y position
+        push    dword SCORE_X-1   ; x position
+        call    drawRect        ; Draw rectangle over old characters
+        
+        push    dword 10        ; Base 10
+        push    dword tempbuff  ; Buffer to store characters in
+        push    dword [score]   ; Push the score
+        call    _itoa
+        add     esp, 12
+
+        mov     ecx, 0          ; Set counter to 32
+        mov     eax, tempbuff   ; Address of buffer in eax
+        .drawloop:
+        movzx   edx, byte [eax] ; Move character into edx
+        cmp     edx, 0          ; Check if there is a character
+        je      .end            ; Exit if there isn't
+        mov     ebx, ecx        ; Get counter
+        shl     ebx, 3          ; Multiply by 8
+        add     ebx, SCORE_X    ; Offset to default score position
+        push    dword SCORE_Y   ; Push y position
+        push    ebx             ; Push x position
+        push    edx             ; Push character
+        call    drawAsc         ; Draw the character on screen
+        inc     eax             ; Increment point in array
+        inc     ecx             ; Increment counter
+        cmp     ecx, 32         ; See if whole array has been viewed
+        jl      .drawloop       ; Loop if not
+        .end:
+        popad
+        leave
+        ret
+
+; drawAsc(char, x, y)
+; Draws an ASCII character on the screen
+; Input:  char: The character to be drawn
+;            x: x position to draw character at
+;            y: y position to draw character at
+; Output:       The character is drawn on the screen
+drawAsc:
+        enter   0,0
+        pushad
+
+        mov     edx, [ebp+12]   ; X position
+        mov     ebx, [ebp+16]   ; Y position
+        mov     eax, [ebp+8]    ; Get character
+        shl     eax, 3          ; Multiply by 8
+        mov     ecx, 8          ; Clear ecx
+        .odrawloop:
+        mov     edi, 0          ; Clear edi
+        mov     esi, 128        ; Move 128 into esi
+        .idrawloop:
+        push    esi             ; Save esi
+        and     esi, [gs:eax]   ; See if there is a pixel to draw
+        jnz     .draw           ; Draw a pixel if there is
+        jmp     .notdraw
+        .draw:
+        push    dword 15        ; White
+        push    ebx             ; Y position
+        push    edx             ; X position
+        call    drawPixel       ; Draw the pixel
+        .notdraw:
+        pop     esi             ; Restore esi
+        shr     esi, 1          ; Shift to next bit
+        inc     edx             ; Next x position
+        inc     edi             ; Increment counter
+        cmp     edi, 8          ; See if row has been finished
+        jl      .idrawloop
+        .odoneloop:
+        inc     eax             ; Next byte of character
+        inc     ebx             ; Next row
+        sub     edx, 8          ; Back to start of row
+        dec     ecx
+        cmp     ecx, 0          ; See if max rows have been read
+        jg      .odrawloop      ; Loop if not
+
+        popad
+        leave
+        ret     12
         
 ; collide(x, y, buffer)
 ; Checks to see if the given block collides with anything.
@@ -825,7 +921,8 @@ deleteLine:
         loop    .top            ; Jump to top until whole row is deleted
 
 
-        
+        inc     dword [score]   ; Add 1 to the score
+        call    drawScore       ; Redraw the score
         popad
         leave
         ret     4
