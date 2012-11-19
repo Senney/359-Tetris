@@ -78,7 +78,7 @@ COLORS          dd L_BLUE,D_BLUE,ORANGE,YELLOW,L_GREEN,PURPLE,L_RED
 SCORE           dd      0
 
 ; Seed for the random number generator.
-RAND_SEED       dd 0xF337CA75
+RAND_SEED       dd 0x86753091
 
 ; Number of iterations for the delay.
 DELAY_NORMAL    equ 40000000    ; Normal delay for quick drop blocks.
@@ -203,8 +203,6 @@ mystart:
 
         call    kb_destroy      ; Restore the old isr.
         call    restoreMode     ; Restore the video mode.
-
-        add     esp, 8          ; Re-align stack.
         
         ret
 
